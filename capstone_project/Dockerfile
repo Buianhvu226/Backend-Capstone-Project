@@ -1,13 +1,18 @@
-# Sử dụng hình ảnh Python 3.11 nhẹ
-FROM python:3.11-slim
+# Sử dụng image Ubuntu 22.04
+FROM ubuntu:22.04
 
 # Thiết lập biến môi trường
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    DEBIAN_FRONTEND=noninteractive
 
-# Cài đặt các công cụ hệ thống cần thiết
+# Cài đặt Python và các công cụ hệ thống
 RUN apt-get update && apt-get install -y \
+    python3.11 \
+    python3.11-dev \
+    python3.11-venv \
+    python3-pip \
     build-essential \
     gcc \
     g++ \
@@ -36,13 +41,13 @@ WORKDIR /app
 
 # Cài đặt thư viện Python
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Sao chép mã nguồn
 COPY . .
 
 # Thu thập file tĩnh
-RUN python manage.py collectstatic --noinput
+RUN python3 manage.py collectstatic --noinput
 
 # Mở cổng
 EXPOSE 8000
