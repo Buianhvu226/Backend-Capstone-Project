@@ -5,16 +5,180 @@ from rest_framework import status
 from .embedding import initialize_vector_db
 from .db_utils import fetch_profiles_from_db
 from .search import search_combined_chroma
+import json
+import requests
+import time
+from .config import PRIMARY_GOOGLE_API_KEY, MAX_RETRIES_LLM, INITIAL_RETRY_DELAY_LLM
+import re
 
 class ProfileSearchAPIView(APIView):
     """
     API endpoint for searching profiles using a user query.
     POST body: { "query": "..." }
     """
+    def moderate_content(self, query):
+        """
+        Kiểm duyệt nội dung tìm kiếm sử dụng Gemini API để đảm bảo nội dung phù hợp
+        Trả về tuple (is_appropriate, feedback)
+        - is_appropriate: True nếu nội dung phù hợp, False nếu không
+        - feedback: Phản hồi từ hệ thống kiểm duyệt
+        """
+        try:
+            # Kiểm tra API key
+            if not PRIMARY_GOOGLE_API_KEY:
+                print("Lỗi: PRIMARY_GOOGLE_API_KEY chưa được cấu hình trong config.py")
+                return True, "Không thể kiểm duyệt nội dung do thiếu API key, cho phép tìm kiếm tạm thời"
+                
+            # Cấu hình API endpoint và headers
+            api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": PRIMARY_GOOGLE_API_KEY,
+            }
+            
+            # Tạo prompt kiểm duyệt
+            prompt = f"""
+            Hãy kiểm duyệt nội dung truy vấn tìm kiếm dưới đây và xác định xem nó có phù hợp để sử dụng trong hệ thống tìm kiếm người thất lạc hay không.
+            
+            Nội dung cần kiểm duyệt:
+            {query}
+            
+            Hãy kiểm tra các tiêu chí sau:
+            1. Không chứa nội dung bạo lực, phân biệt chủng tộc, tôn giáo, giới tính
+            2. Không chứa ngôn từ xúc phạm, thô tục
+            3. Không chứa thông tin cá nhân nhạy cảm không liên quan đến việc tìm kiếm người thất lạc
+            4. Không chứa nội dung quảng cáo, spam
+            5. Không chứa nội dung lừa đảo, giả mạo
+            
+            Trả về kết quả dưới dạng JSON với các trường sau:
+            {{
+                "is_appropriate": true/false,
+                "feedback": "Lý do tại sao nội dung (không) phù hợp"
+            }}
+            """
+            
+            # Cấu hình payload với safety settings
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 1024,
+                },
+                "safetySettings": [
+                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
+                ]
+            }
+            
+            # Gọi API với cơ chế retry
+            for attempt in range(MAX_RETRIES_LLM):
+                try:
+                    response = requests.post(api_endpoint, headers=headers, json=payload, timeout=60)
+                    
+                    # Xử lý các mã lỗi
+                    if response.status_code == 429:
+                        error_type = "Rate Limit (429)"
+                    elif response.status_code >= 500:
+                        error_type = f"Server Error ({response.status_code})"
+                        try:
+                            error_detail = response.json().get('error', {}).get('message', response.text)
+                            print(f"  Server error detail: {error_detail}")
+                        except json.JSONDecodeError:
+                            print(f"  Server error response (non-JSON): {response.text}")
+                    elif response.status_code != 200:
+                        error_type = f"HTTP Error {response.status_code}"
+                        error_detail = "Unknown error"
+                        try:
+                            error_json = response.json().get('error', {})
+                            error_detail = error_json.get('message', response.text)
+                            if "API key not valid" in error_detail:
+                                print(f"Lỗi API Key không hợp lệ (Key: ...{PRIMARY_GOOGLE_API_KEY[-4:]}). Ngừng thử lại.")
+                                return True, "Không thể kiểm duyệt nội dung do lỗi API key, cho phép tìm kiếm tạm thời"
+                        except json.JSONDecodeError:
+                            error_detail = response.text
+                        print(f"Lỗi không thể thử lại ({error_type}) khi gọi Gemini API: {error_detail}")
+                        return True, "Không thể kiểm duyệt nội dung do lỗi API, cho phép tìm kiếm tạm thời"
+                    
+                    # Xử lý lỗi có thể thử lại
+                    if response.status_code == 429 or response.status_code >= 500:
+                        if attempt < MAX_RETRIES_LLM - 1:
+                            wait_time = INITIAL_RETRY_DELAY_LLM * (2 ** attempt)
+                            print(f"Lỗi '{error_type}'. Thử lại sau {wait_time} giây... (Lần {attempt+1}/{MAX_RETRIES_LLM})")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            print(f"Không thể kiểm duyệt nội dung sau {MAX_RETRIES_LLM} lần thử do lỗi '{error_type}'.")
+                            return True, "Không thể kiểm duyệt nội dung do lỗi API, cho phép tìm kiếm tạm thời"
+                    
+                    # Xử lý phản hồi thành công
+                    if response.status_code == 200:
+                        response_data = response.json()
+                        
+                        # Kiểm tra xem có bị block do safety settings không
+                        if response_data.get('promptFeedback', {}).get('blockReason'):
+                            block_reason = response_data['promptFeedback']['blockReason']
+                            print(f"Cảnh báo: Yêu cầu bị chặn do safety settings: {block_reason}")
+                            return True, "Không thể kiểm duyệt nội dung do bị chặn bởi safety settings, cho phép tìm kiếm tạm thời"
+                        
+                        # Trích xuất text từ phản hồi
+                        try:
+                            generated_text = response_data['candidates'][0]['content']['parts'][0]['text']
+                            
+                            if generated_text:
+                                # Tìm và trích xuất phần JSON từ phản hồi
+                                try:
+                                    # Tìm chuỗi JSON trong phản hồi
+                                    json_match = re.search(r'({[\s\S]*})', generated_text)
+                                    if json_match:
+                                        json_str = json_match.group(1)
+                                        moderation_result = json.loads(json_str)
+                                        return moderation_result.get('is_appropriate', True), moderation_result.get('feedback', "Nội dung phù hợp")
+                                    else:
+                                        print("Không tìm thấy chuỗi JSON trong phản hồi của LLM")
+                                        return True, "Không thể phân tích kết quả kiểm duyệt, cho phép tìm kiếm tạm thời"
+                                except json.JSONDecodeError as e:
+                                    print(f"Không thể phân tích JSON từ phản hồi LLM: {e}")
+                                    print(f"Phản hồi gốc: {generated_text}")
+                                    return True, "Không thể phân tích kết quả kiểm duyệt, cho phép tìm kiếm tạm thời"
+                            else:
+                                print("Gemini API trả về phản hồi thành công nhưng text rỗng.")
+                                return True, "Không thể kiểm duyệt nội dung do phản hồi rỗng, cho phép tìm kiếm tạm thời"
+                        except (KeyError, IndexError, TypeError) as e:
+                            print(f"Lỗi khi phân tích response thành công từ Gemini API: {e}")
+                            print(f"Response data: {response_data}")
+                            return True, "Không thể kiểm duyệt nội dung do lỗi phân tích phản hồi, cho phép tìm kiếm tạm thời"
+                
+                except requests.exceptions.RequestException as e:
+                    # Xử lý lỗi mạng
+                    error_type = f"Network Error ({type(e).__name__})"
+                    if attempt < MAX_RETRIES_LLM - 1:
+                        wait_time = INITIAL_RETRY_DELAY_LLM * (2 ** attempt)
+                        print(f"Lỗi '{error_type}'. Thử lại sau {wait_time} giây... (Lần {attempt+1}/{MAX_RETRIES_LLM})")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"Không thể kiểm duyệt nội dung sau {MAX_RETRIES_LLM} lần thử do lỗi '{error_type}'.")
+                        return True, "Không thể kiểm duyệt nội dung do lỗi mạng, cho phép tìm kiếm tạm thời"
+            
+            return True, "Không thể kiểm duyệt nội dung sau nhiều lần thử, cho phép tìm kiếm tạm thời"  # Trả về True nếu vòng lặp kết thúc mà không thành công
+                
+        except Exception as e:
+            print(f"Lỗi khi kiểm duyệt nội dung: {str(e)}")
+            return True, f"Không thể kiểm duyệt nội dung do lỗi: {str(e)}, cho phép tìm kiếm tạm thời"
+    
     def post(self, request):
         user_query = request.data.get("query", "").strip()
         if not user_query:
             return Response({"error": "Missing or empty 'query'."}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Kiểm duyệt nội dung trước khi xử lý
+        is_appropriate, feedback = self.moderate_content(user_query)
+        if not is_appropriate:
+            # Trả về lỗi nếu nội dung không phù hợp
+            return Response({
+                "error": f"Nội dung tìm kiếm không phù hợp: {feedback}"
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         # Initialize vector DB and fetch profiles
         collection = initialize_vector_db()
@@ -28,7 +192,7 @@ class ProfileSearchAPIView(APIView):
         try:
             # search_combined_chroma returns a list of IDs (as strings)
             id_list = search_combined_chroma(
-                df, collection, user_query, top_n_final=22, return_json=True, user=self.request.user
+                df, collection, user_query, top_n_final=200, return_json=True, user=self.request.user
             )
             if not id_list:
                 return Response({"results": []})

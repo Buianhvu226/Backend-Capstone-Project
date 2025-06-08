@@ -6,6 +6,7 @@ from tqdm import tqdm
 import google.generativeai as genai
 import random # Import random for jitter
 import re # Import regular expressions module
+from random import choice
 
 from .config import (
     PRIMARY_GOOGLE_API_KEY,
@@ -77,7 +78,7 @@ Hãy trả về **chỉ các Index gốc** (là các chuỗi ID dạng số) c�
         # Có thể thêm generationConfig và safetySettings nếu cần
         "generationConfig": {
              "temperature": 0.2,
-             "maxOutputTokens": 256
+             "maxOutputTokens": 1024
         }
     }
 
@@ -167,7 +168,6 @@ Hãy trả về **chỉ các Index gốc** (là các chuỗi ID dạng số) c�
 
 # --- Hàm xác minh song song (Cập nhật để xử lý profile_data) ---
 def parallel_verify(query, ranked_profiles_data, max_profiles=300):
-    """Perform parallel verification of profiles using multiple API keys."""
     max_profiles = min(max_profiles, len(ranked_profiles_data))
     profiles_to_verify = ranked_profiles_data[:max_profiles]
     print(f"Xử lý {max_profiles} hồ sơ có điểm số cao nhất để xác minh bằng LLM")
@@ -175,49 +175,22 @@ def parallel_verify(query, ranked_profiles_data, max_profiles=300):
     if not profiles_to_verify:
         return []
 
-    batches = [profiles_to_verify[i:i + BATCH_SIZE_LLM]
-               for i in range(0, len(profiles_to_verify), BATCH_SIZE_LLM)]
-    print(f"Chia {len(profiles_to_verify)} hồ sơ thành {len(batches)} batch, mỗi batch tối đa {BATCH_SIZE_LLM} hồ sơ")
+    print(f"Xử lý {len(profiles_to_verify)} hồ sơ trong 1 lần gọi API")
 
     verified_indices_str = set()
-    num_api_keys = len(GEMINI_API_KEYS)
-    print(f"Sử dụng {num_api_keys} API key để phân phối tải (lưu ý: generate_content dùng key chính)")
 
-    batch_groups = [batches[i:i + MAX_CONCURRENT_REQUESTS_LLM]
-                    for i in range(0, len(batches), MAX_CONCURRENT_REQUESTS_LLM)]
+    # 🔁 Thử nhiều key nếu gặp lỗi
+    for api_key in random.sample(GEMINI_API_KEYS, len(GEMINI_API_KEYS)):
+        print(f"Thử xác minh với API key ...{api_key[-4:]}")
+        result = verify_profiles_with_llm(query, profiles_to_verify, api_key)
+        if result:
+            verified_indices_str.update(result)
+            print(f"✅ Đã xác minh thành công {len(result)} hồ sơ với key ...{api_key[-4:]}")
+            break  # Nếu thành công thì dừng lại
+        else:
+            print(f"❌ Không xác minh được với key ...{api_key[-4:]}, thử key khác.")
 
-    total_batches_processed = 0
-    with tqdm(total=len(batches), desc="Verifying Batches (LLM)") as pbar_llm:
-        for group_idx, batch_group in enumerate(batch_groups):
-            with ThreadPoolExecutor(max_workers=min(len(batch_group), MAX_CONCURRENT_REQUESTS_LLM)) as executor:
-                futures = {}
-                for i, batch in enumerate(batch_group):
-                    if not batch: continue
-                    # Vẫn xoay vòng key để log lỗi cho đúng key nếu có vấn đề khác
-                    api_key_index = (total_batches_processed + i) % num_api_keys
-                    api_key = GEMINI_API_KEYS[api_key_index]
-                    future = executor.submit(verify_profiles_with_llm, query, batch, api_key)
-                    futures[future] = total_batches_processed + i + 1 # Lưu index batch để debug
-
-                for future in futures:
-                    batch_index_debug = futures[future] # Lấy index batch để debug
-                    try:
-                        # verify_profiles_with_llm giờ trả về list (có thể rỗng)
-                        result = future.result()
-                        if result: # Kiểm tra nếu list không rỗng
-                            verified_indices_str.update(result) # Dùng set để tự động loại bỏ trùng lặp
-                    except Exception as e:
-                        # Lỗi xảy ra khi lấy kết quả từ future (ít khả năng hơn vì lỗi đã được xử lý bên trong)
-                        print(f"Lỗi nghiêm trọng khi lấy kết quả của batch {batch_index_debug}: {e}")
-
-            total_batches_processed += len(batch_group)
-            pbar_llm.update(len(batch_group))
-
-            if group_idx < len(batch_groups) - 1:
-                 # print(f"Chờ {BATCH_GROUP_DELAY_LLM} giây trước khi xử lý nhóm batch tiếp theo...") # Có thể bỏ comment nếu cần giảm tải
-                 time.sleep(BATCH_GROUP_DELAY_LLM)
-
-    return list(verified_indices_str) # Trả về list các ID string đã xác minh
+    return list(verified_indices_str)
 
 # --- Hàm trích xuất từ khóa từ truy vấn bằng Gemini ---
 def extract_keywords_gemini(query, model="gemini-1.5-flash-latest"): # Use a valid model name

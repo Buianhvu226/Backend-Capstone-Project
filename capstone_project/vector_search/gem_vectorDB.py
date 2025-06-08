@@ -515,7 +515,7 @@ Các từ khóa quan trọng:"""
         return []
     
 # --- Hàm Tìm kiếm kết hợp ChromaDB và Từ khóa ---
-def search_combined_chroma(df_original, collection, user_query, top_n_final=300):
+def search_combined_chroma(df_original, collection, user_query, top_n_final=200):
     """
     Thực hiện tìm kiếm kết hợp:
     1. Tìm tất cả hồ sơ có ít nhất 1 từ khóa trùng khớp

@@ -55,11 +55,11 @@ class ProfileCreateSerializer(serializers.ModelSerializer):
         model = Profile
         fields = [
             'id',
-            'title', 'full_name', 'siblings', 
+            'full_name', 'siblings', 'title',
             'name_of_father', 'name_of_mother', 'born_year', 'losing_year',
             'description', 'status', 'images'
         ]
-        read_only_fields = ['id']  # <-- Add this line
+        read_only_fields = ['id', 'title']
     
     def create(self, validated_data):
         images_data = validated_data.pop('images', [])

@@ -41,7 +41,7 @@ def fetch_profiles_from_db():
         print(f"Error fetching profiles from database: {e}")
         return pd.DataFrame()
 
-def find_similar_profiles(profile, top_k=5):
+def find_similar_profiles(profile, top_k=10):
     """Find similar profiles to the given profile using vector search."""
     from .embedding import get_embedding, initialize_vector_db
     from .config import DETAIL_COLUMN_NAME

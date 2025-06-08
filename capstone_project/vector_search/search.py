@@ -150,9 +150,9 @@ def search_combined_chroma(df_original, collection, user_query, top_n_final=200,
             create_notification(
                 user=user,
                 notification_type='profile_creating',
-                content=f'{len(verified_indices_str)} kết quả phù hợp nhất sau khi lọc bằng LLM.',
+                content=f'{len(verified_indices_str) - 1} kết quả phù hợp nhất sau khi lọc bằng LLM.',
                 additional_data={
-                    'text': f'{len(verified_indices_str)} kết quả phù hợp nhất sau khi lọc bằng LLM.',
+                    'text': f'{len(verified_indices_str) - 1} kết quả phù hợp nhất sau khi lọc bằng LLM.',
                 }
             )
             for id_str in verified_indices_str:
@@ -241,7 +241,7 @@ def search_combined_chroma(df_original, collection, user_query, top_n_final=200,
     print(f"\n--- Top {min(10, len(top_results))} Kết quả (Theo Điểm Kết Hợp, Trước LLM) ---")
     from notifications.utils import create_notification
     create_notification(
-        user=user,
+        user=user,  
         notification_type='profile_creating',
         content=f'Đã tìm thấy {len(top_results)} hồ sơ phù hợp sau khi kết hợp từ khóa và vector search.',
         additional_data={
@@ -304,9 +304,9 @@ def search_combined_chroma(df_original, collection, user_query, top_n_final=200,
         create_notification(
             user=user,
             notification_type='profile_creating',
-            content=f'Đã tìm thấy {len(verified_indices_str)} kết quả phù hợp nhất sau khi lọc bằng LLM.',
+            content=f'Đã tìm thấy {len(verified_indices_str) - 1} kết quả phù hợp nhất sau khi lọc bằng LLM.',
             additional_data={
-                'text': f'Đã tìm thấy {len(verified_indices_str)} kết quả phù hợp nhất sau khi lọc bằng LLM.',
+                'text': f'Đã tìm thấy {len(verified_indices_str) - 1} kết quả phù hợp nhất sau khi lọc bằng LLM.',
             }
         )
         verified_indices_int = [int(id_str) for id_str in verified_indices_str if id_str.isdigit()]

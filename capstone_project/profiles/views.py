@@ -53,6 +53,10 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.method in permissions.SAFE_METHODS:
             return True
+        # Cho phép admin thực hiện mọi thao tác
+        if request.user.is_staff or request.user.is_superuser:
+            return True
+        # Cho phép chủ sở hữu thực hiện thao tác
         return obj.user == request.user
 
 class ProfileViewSet(viewsets.ModelViewSet):
@@ -76,10 +80,188 @@ class ProfileViewSet(viewsets.ModelViewSet):
         else:
             permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly]
         return [permission() for permission in permission_classes]
-    
-    def extract_profile_info(self, title, description):
+
+    def moderate_content(self, description):
         """
-        Sử dụng LLM để trích xuất thông tin từ tiêu đề và mô tả
+        Sử dụng Gemini API để kiểm duyệt nội dung, phát hiện nội dung không phù hợp
+        như bạo lực, kích động, phân biệt chủng tộc, v.v. Những nội dung không có ý nghĩa là đăng tin tìm kiếm người thất lạc cũng được coi là không phù hợp.
+        
+        Trả về:
+        - is_appropriate: True nếu nội dung phù hợp, False nếu không
+        - feedback: Phản hồi chi tiết về vấn đề (nếu có)
+        """
+        try:
+            # Import các thư viện cần thiết từ vector_search
+            from vector_search.config import PRIMARY_GOOGLE_API_KEY
+            import json
+            import requests
+            import time
+            
+            # Kiểm tra API key
+            if not PRIMARY_GOOGLE_API_KEY:
+                print("Lỗi: PRIMARY_GOOGLE_API_KEY chưa được cấu hình trong config.py")
+                return True, ""  # Mặc định cho phép nếu không có API key
+                
+            # Cấu hình API endpoint và headers
+            api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": PRIMARY_GOOGLE_API_KEY,
+            }
+            
+            # Tạo prompt để kiểm duyệt nội dung
+            prompt = f"""
+            Bạn là một kiểm duyệt viên lâu năm cho chương trình đăng tin tìm kiếm người thân thất lạc.
+            Hãy kiểm tra nội dung của 1 hồ sơ dưới đây và xác định xem nó có chứa bất kỳ nội dung không phù hợp nào không, bao gồm:
+            - Bạo lực hoặc đe dọa bạo lực
+            - Kích động thù hận hoặc phân biệt đối xử
+            - Nội dung khiêu dâm hoặc tình dục không phù hợp
+            - Thông tin cá nhân nhạy cảm không liên quan đến việc tìm kiếm người thất lạc
+            - Ngôn ngữ xúc phạm hoặc thô tục
+            - Thông tin sai lệch hoặc gây hiểu lầm nghiêm trọng
+            - Quảng cáo hoặc spam
+            - Nội dung không liên quan đến việc tìm kiếm người thất lạc cũng được coi là không phù hợp.
+            
+            Nội dung cần kiểm tra: {description}
+            
+            Trả về kết quả dưới dạng JSON với các trường sau:
+            {{
+                "is_appropriate": true/false,  // true nếu nội dung phù hợp, false nếu không
+                "feedback": "Phản hồi ngắn gọn về vấn đề (nếu có)"
+            }}
+            
+            Lưu ý: Đây là nội dung cho hồ sơ tìm kiếm người thất lạc, nên các thông tin cá nhân liên quan đến người thất lạc và gia đình họ là cần thiết và phù hợp.
+            """
+            
+            # Cấu hình payload
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.2,
+                    "maxOutputTokens": 1024,
+                },
+                "safetySettings": [
+                    {
+                        "category": "HARM_CATEGORY_HARASSMENT",
+                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_HATE_SPEECH",
+                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                    },
+                    {
+                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
+                    }
+                ]
+            }
+            
+            # Gọi API với cơ chế retry
+            from vector_search.config import MAX_RETRIES_LLM, INITIAL_RETRY_DELAY_LLM
+            
+            for attempt in range(MAX_RETRIES_LLM):
+                try:
+                    response = requests.post(api_endpoint, headers=headers, json=payload, timeout=60)
+                    
+                    # Xử lý các mã lỗi
+                    if response.status_code == 429:
+                        error_type = "Rate Limit (429)"
+                    elif response.status_code >= 500:
+                        error_type = f"Server Error ({response.status_code})"
+                        try:
+                            error_detail = response.json().get('error', {}).get('message', response.text)
+                            print(f"  Server error detail: {error_detail}")
+                        except json.JSONDecodeError:
+                            print(f"  Server error response (non-JSON): {response.text}")
+                    elif response.status_code != 200:
+                        error_type = f"HTTP Error {response.status_code}"
+                        error_detail = "Unknown error"
+                        try:
+                            error_json = response.json().get('error', {})
+                            error_detail = error_json.get('message', response.text)
+                            if "API key not valid" in error_detail:
+                                print(f"Lỗi API Key không hợp lệ (Key: ...{PRIMARY_GOOGLE_API_KEY[-4:]}). Ngừng thử lại.")
+                                return True, ""  # Mặc định cho phép nếu có lỗi API key
+                        except json.JSONDecodeError:
+                            error_detail = response.text
+                        print(f"Lỗi không thể thử lại ({error_type}) khi gọi Gemini API: {error_detail}")
+                        return True, ""  # Mặc định cho phép nếu có lỗi không thể thử lại
+                    
+                    # Xử lý lỗi có thể thử lại
+                    if response.status_code == 429 or response.status_code >= 500:
+                        if attempt < MAX_RETRIES_LLM - 1:
+                            wait_time = INITIAL_RETRY_DELAY_LLM * (2 ** attempt)
+                            print(f"Lỗi '{error_type}'. Thử lại sau {wait_time} giây... (Lần {attempt+1}/{MAX_RETRIES_LLM})")
+                            time.sleep(wait_time)
+                            continue
+                        else:
+                            print(f"Không thể kiểm duyệt nội dung sau {MAX_RETRIES_LLM} lần thử do lỗi '{error_type}'.")
+                            return True, ""  # Mặc định cho phép nếu không thể kiểm duyệt
+                    
+                    # Xử lý phản hồi thành công
+                    if response.status_code == 200:
+                        response_data = response.json()
+                        
+                        # Kiểm tra xem có bị block do safety settings không
+                        if response_data.get('promptFeedback', {}).get('blockReason'):
+                            block_reason = response_data['promptFeedback']['blockReason']
+                            print(f"Cảnh báo: Yêu cầu bị chặn do safety settings: {block_reason}")
+                            return False, f"Nội dung không phù hợp: {block_reason}"  # Không cho phép nếu bị block
+                        
+                        # Trích xuất text từ phản hồi
+                        try:
+                            generated_text = response_data['candidates'][0]['content']['parts'][0]['text']
+                            
+                            if generated_text:
+                                # Tìm và trích xuất phần JSON từ phản hồi
+                                try:
+                                    # Tìm chuỗi JSON trong phản hồi
+                                    import re
+                                    json_match = re.search(r'({[\s\S]*})', generated_text)
+                                    if json_match:
+                                        json_str = json_match.group(1)
+                                        moderation_result = json.loads(json_str)
+                                        return moderation_result.get('is_appropriate', True), moderation_result.get('feedback', "")
+                                    else:
+                                        print("Không tìm thấy chuỗi JSON trong phản hồi của LLM")
+                                        return True, ""  # Mặc định cho phép nếu không tìm thấy JSON
+                                except json.JSONDecodeError as e:
+                                    print(f"Không thể phân tích JSON từ phản hồi LLM: {e}")
+                                    print(f"Phản hồi gốc: {generated_text}")
+                                    return True, ""  # Mặc định cho phép nếu không phân tích được JSON
+                            else:
+                                print("Gemini API trả về phản hồi thành công nhưng text rỗng.")
+                                return True, ""  # Mặc định cho phép nếu text rỗng
+                        except (KeyError, IndexError, TypeError) as e:
+                            print(f"Lỗi khi phân tích response thành công từ Gemini API: {e}")
+                            print(f"Response data: {response_data}")
+                            return True, ""  # Mặc định cho phép nếu có lỗi phân tích
+                
+                except requests.exceptions.RequestException as e:
+                    # Xử lý lỗi mạng
+                    error_type = f"Network Error ({type(e).__name__})"
+                    if attempt < MAX_RETRIES_LLM - 1:
+                        wait_time = INITIAL_RETRY_DELAY_LLM * (2 ** attempt)
+                        print(f"Lỗi '{error_type}'. Thử lại sau {wait_time} giây... (Lần {attempt+1}/{MAX_RETRIES_LLM})")
+                        time.sleep(wait_time)
+                    else:
+                        print(f"Không thể kiểm duyệt nội dung sau {MAX_RETRIES_LLM} lần thử do lỗi '{error_type}'.")
+                        return True, ""  # Mặc định cho phép nếu có lỗi mạng
+            
+            return True, ""  # Mặc định cho phép nếu vòng lặp kết thúc mà không thành công
+                
+        except Exception as e:
+            print(f"Lỗi khi kiểm duyệt nội dung: {str(e)}")
+            return True, ""  # Mặc định cho phép nếu có lỗi không xác định
+
+    
+    def extract_profile_info(self, description):
+        """
+        Sử dụng LLM để trích xuất thông tin từ mô tả của 1 hồ sơ tìm kiếm người thất lạc
         """
         prompt = f"""
         Hãy trích xuất các thông tin sau từ đoạn văn bản dưới đây:
@@ -87,14 +269,15 @@ class ProfileViewSet(viewsets.ModelViewSet):
         - Tên các anh chị em (nếu có)
         - Tên của cha (nếu có)
         - Tên của mẹ (nếu có)
-        - Năm sinh (nếu có)
-        - Năm thất lạc (nếu có)
+        - Năm sinh (nếu có hoặc có thể suy luận từ mô tả)
+        - Năm thất lạc (nếu có hoặc có thể suy luận từ mô tả)
+        - Tiêu đề của hồ sơ (Theo định dạng là ai đang tìm kiếm ai, hoặc gia đình đang tìm kiếm ai, ...)
 
-        Tiêu đề: {title}
         Mô tả: {description}
 
         Trả về kết quả dưới dạng JSON với các trường sau:
         {{
+            "title": "Tiêu đề của hồ sơ",
             "full_name": "Tên đầy đủ của người bị thất lạc",
             "siblings": "Tên các anh chị em, phân cách bằng dấu phẩy",
             "name_of_father": "Tên của cha",
@@ -129,8 +312,8 @@ class ProfileViewSet(viewsets.ModelViewSet):
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
-                    "temperature": 0.1,
-                    "maxOutputTokens": 256
+                    "temperature": 0.3,
+                    "maxOutputTokens": 1024,
                 }
             }
             
@@ -232,10 +415,11 @@ class ProfileViewSet(viewsets.ModelViewSet):
             print(f"Lỗi khi trích xuất thông tin: {str(e)}")
             return {}
     
-    def generate_full_description(self, title, description, extracted_info):
+    def generate_full_description(self, description, extracted_info):
         """
         Tạo mô tả đầy đủ từ tiêu đề, mô tả gốc và thông tin đã trích xuất
         """
+        title = extracted_info.get('title', '')
         full_name = extracted_info.get('full_name', '')
         siblings = extracted_info.get('siblings', '')
         name_of_father = extracted_info.get('name_of_father', '')
@@ -269,31 +453,49 @@ class ProfileViewSet(viewsets.ModelViewSet):
         return full_description
     
     def perform_create(self, serializer):
-        title = serializer.validated_data.get('title', '')
         description = serializer.validated_data.get('description', '')
-
+    
+        # Kiểm duyệt nội dung trước khi xử lý
+        is_appropriate, feedback = self.moderate_content(description)
+        if not is_appropriate:
+            # Thông báo nội dung không phù hợp
+            from notifications.utils import create_notification
+            create_notification(
+                user=self.request.user,
+                notification_type='profile_creating_failed',
+                content= f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
+                additional_data={
+                    'text': f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
+                }
+            )
+            # Trả về lỗi
+            from rest_framework.exceptions import ValidationError
+            raise ValidationError({
+                "description": f"Nội dung không phù hợp để đăng lên hệ thống: {feedback}"
+            })
+    
         # Trích xuất thông tin từ tiêu đề và mô tả
-        extracted_info = self.extract_profile_info(title, description)
-
+        extracted_info = self.extract_profile_info(description)
+    
         # Tạo thông báo đang trong quá trình tạo hồ sơ
         from notifications.utils import create_notification
         create_notification(
             user=self.request.user,
             notification_type='profile_creating',
-            content=f'Đang trích xuất thông tin từ tiêu đề và mô tả...',
+            content=f'Đang trích xuất thông tin từ mô tả...',
             additional_data={
-                'text': f'Đang trích xuất thông tin hồ sơ từ tiêu đề {title} và mô tả {description}',
+                'text': f'Đang trích xuất thông tin hồ sơ từ mô tả {description}',
             }
         )
-
+    
         # Cập nhật các trường đã trích xuất vào validated_data (dù có hay không)
-        for field in ['full_name', 'siblings', 'name_of_father', 'name_of_mother', 'born_year', 'losing_year']:
+        for field in ['full_name', 'siblings', 'name_of_father', 'name_of_mother', 'born_year', 'losing_year', 'title']:
             serializer.validated_data[field] = extracted_info.get(field, "")
-
+    
         # Tạo mô tả đầy đủ
-        full_description = self.generate_full_description(title, description, extracted_info)
+        full_description = self.generate_full_description(description, extracted_info)
         serializer.validated_data['description'] = full_description
-
+    
         # Thông báo đã tạo mô tả đầy đủ
         from notifications.utils import create_notification
         create_notification(
@@ -304,7 +506,7 @@ class ProfileViewSet(viewsets.ModelViewSet):
                 'text': f'Hồ sơ đã được tạo thành công với mô tả đầy đủ: {full_description}',
             }
         )
-
+    
         # Lưu profile
         profile = serializer.save(user=self.request.user)
 
@@ -386,7 +588,7 @@ class ProfileViewSet(viewsets.ModelViewSet):
         
         # Sử dụng mô tả chi tiết để tìm kiếm các hồ sơ phù hợp nhất
         id_list = search_combined_chroma(
-            df, collection, detail_text, top_n_final=22, return_json=True, user=self.request.user
+            df, collection, detail_text, top_n_final=200, return_json=True, user=self.request.user
         )
         if not id_list:
             return Response({"results": []})
