@@ -6,13 +6,14 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# Cài đặt các công cụ hệ thống cần thiết
+# Cài đặt các công cụ hệ thống cần thiết cho dlib, opencv-python, và các thư viện khác
 RUN apt-get update && apt-get install -y \
     build-essential \
     gcc \
     g++ \
     libpq-dev \
     cmake \
+    ninja-build \
     libopenblas-dev \
     liblapack-dev \
     libx11-dev \
@@ -20,6 +21,10 @@ RUN apt-get update && apt-get install -y \
     libsm6 \
     libxext6 \
     libxrender-dev \
+    libjpeg-dev \
+    libpng-dev \
+    libtiff-dev \
+    zlib1g-dev \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
