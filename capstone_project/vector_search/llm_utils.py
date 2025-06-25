@@ -48,6 +48,7 @@ Hãy so sánh **cực kỳ cẩn thận** các chi tiết nhận dạng cốt l�
 - **Năm sinh:** Phải khớp hoặc gần đúng.
 - **Quê quán/Địa chỉ liên quan:** Phải khớp hoặc có liên quan logic.
 - **Hoàn cảnh thất lạc (thời gian, địa điểm, sự kiện chính):** Phải tương đồng đáng kể.
+- **Sự kiện, manh mối hoặc đặc điểm nhận dạng đặc biệt trong mô tả (thời gian, địa điểm, sự kiện chính, ký ức, đặc điểm,...):** Phải tương đồng đáng kể.
 
 **Quy tắc loại trừ quan trọng:**
 - Nếu **Họ tên người thất lạc** trong hồ sơ **khác biệt rõ ràng** so với yêu cầu, hãy **LOẠI BỎ** hồ sơ đó NGAY LẬP TỨC, bất kể các chi tiết khác có trùng khớp hay không.

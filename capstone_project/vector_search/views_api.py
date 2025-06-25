@@ -10,6 +10,7 @@ import requests
 import time
 from .config import PRIMARY_GOOGLE_API_KEY, MAX_RETRIES_LLM, INITIAL_RETRY_DELAY_LLM
 import re
+from queue_list.queue import add_user_to_queue, remove_user_from_queue, is_user_turn
 
 class ProfileSearchAPIView(APIView):
     """
@@ -38,6 +39,7 @@ class ProfileSearchAPIView(APIView):
             
             # Tạo prompt kiểm duyệt
             prompt = f"""
+            Tưởng tượng bạn là một nhà kiểm duyệt các nội dung tìm kiếm cho một chương trình tìm kiếm người thất lạc.
             Hãy kiểm duyệt nội dung truy vấn tìm kiếm dưới đây và xác định xem nó có phù hợp để sử dụng trong hệ thống tìm kiếm người thất lạc hay không.
             
             Nội dung cần kiểm duyệt:
@@ -55,21 +57,21 @@ class ProfileSearchAPIView(APIView):
                 "is_appropriate": true/false,
                 "feedback": "Lý do tại sao nội dung (không) phù hợp"
             }}
+            * Lưu ý: Không nên quá khắt khe trong nội dung kiểm duyệt. Nội dùng tìm kiếm khá là đa dạng nên không phải lúc nào xuất
+            hiện những từ ngữ liên quan đến tiêu chuẩn là bị cho là không phù hợp. Hãy phân tích nội dung thật kỹ để tránh đưa ra những kết luận quá 
+            khắt khe khiến cho việc xử lý tìm kiếm cho người dùng gặp thất bại.
+            Ví dụ: 
+            + Tìm kiếm con lai thì là nội dung bình thường, không phải là nội dung kì thị - phân biệt
+            + Những hồ sơ nào có liên quan đến đặc điểm nhận dạng trên cơ thể cũng là nội dung bình thường, không phải là nội dung thô tục, khiêu dâm, ...
             """
             
             # Cấu hình payload với safety settings
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
-                    "temperature": 0.2,
+                    "temperature": 0.5,
                     "maxOutputTokens": 1024,
                 },
-                "safetySettings": [
-                    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"},
-                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_MEDIUM_AND_ABOVE"}
-                ]
             }
             
             # Gọi API với cơ chế retry
@@ -168,58 +170,72 @@ class ProfileSearchAPIView(APIView):
             return True, f"Không thể kiểm duyệt nội dung do lỗi: {str(e)}, cho phép tìm kiếm tạm thời"
     
     def post(self, request):
-        user_query = request.data.get("query", "").strip()
-        if not user_query:
-            return Response({"error": "Missing or empty 'query'."}, status=status.HTTP_400_BAD_REQUEST)
+        user_id = request.user.id
+        # Thêm người dùng vào hàng đợi
+        add_user_to_queue(user_id)
 
-        # Kiểm duyệt nội dung trước khi xử lý
-        is_appropriate, feedback = self.moderate_content(user_query)
-        if not is_appropriate:
-            # Trả về lỗi nếu nội dung không phù hợp
-            return Response({
-                "error": f"Nội dung tìm kiếm không phù hợp: {feedback}"
-            }, status=status.HTTP_400_BAD_REQUEST)
+        # Chờ đến lượt của người dùng
+        while not is_user_turn(user_id):
+            time.sleep(0.1)  # Chờ 100ms rồi kiểm tra lại
 
-        # Initialize vector DB and fetch profiles
-        collection = initialize_vector_db()
-        if collection is None:
-            return Response({"error": "Vector DB unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        df = fetch_profiles_from_db()
-        if df.empty:
-            return Response({"error": "No profiles found in database."}, status=status.HTTP_404_NOT_FOUND)
-
-        # Run the search
         try:
-            # search_combined_chroma returns a list of IDs (as strings)
-            id_list = search_combined_chroma(
-                df, collection, user_query, top_n_final=200, return_json=True, user=self.request.user
-            )
-            if not id_list:
-                return Response({"results": []})
 
-            # For each ID, build a detailed result dict
-            detailed_results = []
-            for idx in id_list:
-                # idx may be string or int, ensure correct type for DataFrame lookup
-                try:
-                    profile = df.loc[int(idx)] if int(idx) in df.index else df[df['id'] == int(idx)].iloc[0]
-                except Exception:
-                    continue
+            user_query = request.data.get("query", "").strip()
+            if not user_query:
+                return Response({"error": "Missing or empty 'query'."}, status=status.HTTP_400_BAD_REQUEST)
 
-                detailed_results.append({
-                    "id": profile.get('id', ''),
-                    "title": profile.get('Tiêu đề', ''),
-                    "full_name": profile.get('Họ và tên', ''),
-                    "losing_year": profile.get('Năm thất lạc', ''),
-                    "born_year": profile.get('Năm sinh', ''),
-                    "name_of_father": profile.get('Tên cha', ''),
-                    "name_of_mother": profile.get('Tên mẹ', ''),
-                    "siblings": profile.get('Anh chị em', ''),
-                    "detail": str(profile.get('Chi tiet_merged', '')),
-                })
+            # Kiểm duyệt nội dung trước khi xử lý
+            is_appropriate, feedback = self.moderate_content(user_query)
+            if not is_appropriate:
+                # Trả về lỗi nếu nội dung không phù hợp
+                return Response({
+                    "error": f"Nội dung tìm kiếm không phù hợp: {feedback}"
+                }, status=status.HTTP_400_BAD_REQUEST)
 
-            print("Tìm theo truy vấn detailed_results:", detailed_results)
+            # Initialize vector DB and fetch profiles
+            collection = initialize_vector_db()
+            if collection is None:
+                return Response({"error": "Vector DB unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            df = fetch_profiles_from_db()
+            if df.empty:
+                return Response({"error": "No profiles found in database."}, status=status.HTTP_404_NOT_FOUND)
 
-            return Response({"results": detailed_results})
-        except Exception as e:
-            return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Run the search
+            try:
+                # search_combined_chroma returns a list of IDs (as strings)
+                id_list = search_combined_chroma(
+                    df, collection, user_query, top_n_final=100, return_json=True, user=self.request.user
+                )
+                if not id_list:
+                    return Response({"results": []})
+
+                # For each ID, build a detailed result dict
+                detailed_results = []
+                for idx in id_list:
+                    # idx may be string or int, ensure correct type for DataFrame lookup
+                    try:
+                        profile = df.loc[int(idx)] if int(idx) in df.index else df[df['id'] == int(idx)].iloc[0]
+                    except Exception:
+                        continue
+
+                    detailed_results.append({
+                        "id": profile.get('id', ''),
+                        "title": profile.get('Tiêu đề', ''),
+                        "full_name": profile.get('Họ và tên', ''),
+                        "losing_year": profile.get('Năm thất lạc', ''),
+                        "born_year": profile.get('Năm sinh', ''),
+                        "name_of_father": profile.get('Tên cha', ''),
+                        "name_of_mother": profile.get('Tên mẹ', ''),
+                        "siblings": profile.get('Anh chị em', ''),
+                        "detail": str(profile.get('Chi tiet_merged', '')),
+                    })
+
+                print("Tìm theo truy vấn detailed_results:", detailed_results)
+
+                return Response({"results": detailed_results})
+            except Exception as e:
+                return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            
+        finally:
+            # Xóa người dùng khỏi hàng đợi sau khi tìm kiếm xong
+            remove_user_from_queue(user_id)

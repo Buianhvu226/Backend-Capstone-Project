@@ -20,6 +20,8 @@ from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 from datetime import datetime
 from django.db.models import Count
+from queue_list.queue import add_user_to_queue, remove_user_from_queue, is_user_turn
+import time
 
 # Define ProfileFilter class
 class ProfileFilter(django_filters.FilterSet):
@@ -111,26 +113,30 @@ class ProfileViewSet(viewsets.ModelViewSet):
             
             # Tạo prompt để kiểm duyệt nội dung
             prompt = f"""
-            Bạn là một kiểm duyệt viên lâu năm cho chương trình đăng tin tìm kiếm người thân thất lạc.
-            Hãy kiểm tra nội dung của 1 hồ sơ dưới đây và xác định xem nó có chứa bất kỳ nội dung không phù hợp nào không, bao gồm:
-            - Bạo lực hoặc đe dọa bạo lực
-            - Kích động thù hận hoặc phân biệt đối xử
-            - Nội dung khiêu dâm hoặc tình dục không phù hợp
-            - Thông tin cá nhân nhạy cảm không liên quan đến việc tìm kiếm người thất lạc
-            - Ngôn ngữ xúc phạm hoặc thô tục
-            - Thông tin sai lệch hoặc gây hiểu lầm nghiêm trọng
-            - Quảng cáo hoặc spam
-            - Nội dung không liên quan đến việc tìm kiếm người thất lạc cũng được coi là không phù hợp.
+            Tưởng tượng bạn là một nhà kiểm duyệt các nội dung tìm kiếm cho một chương trình tìm kiếm người thất lạc.
+            Hãy kiểm duyệt nội dung truy vấn tìm kiếm dưới đây và xác định xem nó có phù hợp để sử dụng trong hệ thống tìm kiếm người thất lạc hay không.
             
-            Nội dung cần kiểm tra: {description}
+            Nội dung cần kiểm duyệt:
+            {description}
+            
+            Hãy kiểm tra các tiêu chí sau:
+            1. Không chứa nội dung bạo lực, phân biệt chủng tộc, tôn giáo, giới tính
+            2. Không chứa ngôn từ xúc phạm, thô tục
+            3. Không chứa thông tin cá nhân nhạy cảm không liên quan đến việc tìm kiếm người thất lạc
+            4. Không chứa nội dung quảng cáo, spam
+            5. Không chứa nội dung lừa đảo, giả mạo
             
             Trả về kết quả dưới dạng JSON với các trường sau:
             {{
-                "is_appropriate": true/false,  // true nếu nội dung phù hợp, false nếu không
-                "feedback": "Phản hồi ngắn gọn về vấn đề (nếu có)"
+                "is_appropriate": true/false,
+                "feedback": "Lý do tại sao nội dung (không) phù hợp"
             }}
-            
-            Lưu ý: Đây là nội dung cho hồ sơ tìm kiếm người thất lạc, nên các thông tin cá nhân liên quan đến người thất lạc và gia đình họ là cần thiết và phù hợp.
+            * Lưu ý: Không nên quá khắt khe trong nội dung kiểm duyệt. Nội dùng tìm kiếm khá là đa dạng nên không phải lúc nào xuất
+            hiện những từ ngữ liên quan đến tiêu chuẩn là bị cho là không phù hợp. Hãy phân tích nội dung thật kỹ để tránh đưa ra những kết luận quá 
+            khắt khe khiến cho việc xử lý tìm kiếm cho người dùng gặp thất bại.
+            Ví dụ: 
+            + Tìm kiếm con lai thì là nội dung bình thường, không phải là nội dung kì thị - phân biệt
+            + Những hồ sơ nào có liên quan đến đặc điểm nhận dạng trên cơ thể cũng là nội dung bình thường, không phải là nội dung thô tục, khiêu dâm, ...
             """
             
             # Cấu hình payload
@@ -140,24 +146,6 @@ class ProfileViewSet(viewsets.ModelViewSet):
                     "temperature": 0.2,
                     "maxOutputTokens": 1024,
                 },
-                "safetySettings": [
-                    {
-                        "category": "HARM_CATEGORY_HARASSMENT",
-                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                    },
-                    {
-                        "category": "HARM_CATEGORY_HATE_SPEECH",
-                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                    },
-                    {
-                        "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                    },
-                    {
-                        "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                        "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-                    }
-                ]
             }
             
             # Gọi API với cơ chế retry
@@ -453,237 +441,251 @@ class ProfileViewSet(viewsets.ModelViewSet):
         return full_description
     
     def perform_create(self, serializer):
-        description = serializer.validated_data.get('description', '')
-    
-        # Kiểm duyệt nội dung trước khi xử lý
-        is_appropriate, feedback = self.moderate_content(description)
-        if not is_appropriate:
-            # Thông báo nội dung không phù hợp
-            from notifications.utils import create_notification
-            create_notification(
-                user=self.request.user,
-                notification_type='profile_creating_failed',
-                content= f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
-                additional_data={
-                    'text': f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
-                }
-            )
-            # Trả về lỗi
-            from rest_framework.exceptions import ValidationError
-            raise ValidationError({
-                "description": f"Nội dung không phù hợp để đăng lên hệ thống: {feedback}"
-            })
-    
-        # Trích xuất thông tin từ tiêu đề và mô tả
-        extracted_info = self.extract_profile_info(description)
-    
-        # Tạo thông báo đang trong quá trình tạo hồ sơ
-        from notifications.utils import create_notification
-        create_notification(
-            user=self.request.user,
-            notification_type='profile_creating',
-            content=f'Đang trích xuất thông tin từ mô tả...',
-            additional_data={
-                'text': f'Đang trích xuất thông tin hồ sơ từ mô tả {description}',
-            }
-        )
-    
-        # Cập nhật các trường đã trích xuất vào validated_data (dù có hay không)
-        for field in ['full_name', 'siblings', 'name_of_father', 'name_of_mother', 'born_year', 'losing_year', 'title']:
-            serializer.validated_data[field] = extracted_info.get(field, "")
-    
-        # Tạo mô tả đầy đủ
-        full_description = self.generate_full_description(description, extracted_info)
-        serializer.validated_data['description'] = full_description
-    
-        # Thông báo đã tạo mô tả đầy đủ
-        from notifications.utils import create_notification
-        create_notification(
-            user=self.request.user,
-            notification_type='profile_creating',
-            content=f'Hồ sơ đã được tạo thành công.',
-            additional_data={
-                'text': f'Hồ sơ đã được tạo thành công với mô tả đầy đủ: {full_description}',
-            }
-        )
-    
-        # Lưu profile
-        profile = serializer.save(user=self.request.user)
+        user_id = self.request.user.id
 
-        # Thông báo đã lưu profile
-        from notifications.utils import create_notification
-        create_notification(
-            user=self.request.user,
-            notification_type='profile_creating',
-            content=f'Hồ sơ đã được lưu tạm thời thành công.',
-            additional_data={
-                'text': f'Hồ sơ đã được lưu tạm thời thành công với mô tả đầy đủ: {full_description}',
-            }
-        )
+        # Thêm người dùng vào hàng đợi
+        add_user_to_queue(user_id)
         
-        # Xử lý embedding và vector search
-        detail_text = getattr(profile, DETAIL_COLUMN_NAME, None)
-        if not detail_text:
-            detail_text = profile.description
+        # Chờ đến lượt của người dùng
+        while not is_user_turn(user_id):
+            time.sleep(0.1)  # Chờ 100ms rồi kiểm tra lại
 
-        embedding = get_embedding(
-            detail_text,
-            task_type="RETRIEVAL_DOCUMENT"
-        )
-
-        if embedding:
-            collection = initialize_vector_db()
-            metadata = {
-                "Tiêu đề": profile.title or "",
-                "Họ và tên": profile.full_name or "",
-                "Năm sinh": getattr(profile, "born_year", "") or "",
-                "Năm thất lạc": getattr(profile, "losing_year", "") or "",
-                "id": profile.id if profile.id is not None else "",
-            }
-            try:
-                collection.upsert(
-                    ids=[str(profile.id)],
-                    embeddings=[embedding],
-                    metadatas=[metadata]
-                )
-                print(f"Profile {profile.id} embedded and upserted into ChromaDB.")
-
-                # Thông báo đã lưu profile
+        try:
+            description = serializer.validated_data.get('description', '')
+        
+            # Kiểm duyệt nội dung trước khi xử lý
+            is_appropriate, feedback = self.moderate_content(description)
+            if not is_appropriate:
+                # Thông báo nội dung không phù hợp
                 from notifications.utils import create_notification
                 create_notification(
                     user=self.request.user,
-                    notification_type='profile_creating',
-                    content=f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công.',
+                    notification_type='profile_creating_failed',
+                    content= f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
                     additional_data={
-                        'text': f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công với mô tả đầy đủ',
+                        'text': f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
                     }
                 )
-            except Exception as e:
-                print(f"Error upserting profile {profile.id} into ChromaDB: {e}")
-        else:
-            print(f"Could not create embedding for profile {profile.id}.")
-            
-        # --- Gợi ý hồ sơ tương tự và lưu vào bảng ProfileMatchSuggestion ---
-        from profiles.models import ProfileMatchSuggestion, Profile as ProfileModel
-        from notifications.utils import create_notification
-        from django.db.models import Q
+                # Trả về lỗi
+                from rest_framework.exceptions import ValidationError
+                raise ValidationError({
+                    "description": f"Nội dung không phù hợp để đăng lên hệ thống: {feedback}"
+                })
         
-        # Lấy toàn bộ profiles dưới dạng DataFrame
-        collection = initialize_vector_db()
-        if collection is None:
-            return Response({"error": "Vector DB unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        df = fetch_profiles_from_db()
-        if df.empty:
-            return Response({"error": "No profiles found in database."}, status=status.HTTP_404_NOT_FOUND)
-        else:
+            # Trích xuất thông tin từ tiêu đề và mô tả
+            extracted_info = self.extract_profile_info(description)
+        
+            # Tạo thông báo đang trong quá trình tạo hồ sơ
             from notifications.utils import create_notification
             create_notification(
                 user=self.request.user,
                 notification_type='profile_creating',
-                content=f'Đang tải toàn bộ hồ sơ từ cơ sở dữ liệu...',
+                content=f'Đang trích xuất thông tin từ mô tả...',
                 additional_data={
-                    'text': f'Đang tải toàn bộ hồ sơ từ cơ sở dữ liệu...',
+                    'text': f'Đang trích xuất thông tin hồ sơ từ mô tả {description}',
                 }
             )
         
-        # Sử dụng mô tả chi tiết để tìm kiếm các hồ sơ phù hợp nhất
-        id_list = search_combined_chroma(
-            df, collection, detail_text, top_n_final=200, return_json=True, user=self.request.user
-        )
-        if not id_list:
-            return Response({"results": []})
-
-        # For each ID, build a detailed result dict
-        detailed_results = []
-        for idx in id_list:
-            # idx may be string or int, ensure correct type for DataFrame lookup
-            try:
-                profile_row = df.loc[int(idx)] if int(idx) in df.index else df[df['id'] == int(idx)].iloc[0]
-            except Exception:
-                continue
-
-            detailed_results.append({
-                "id": profile_row .get('id', ''),
-                "title": profile_row .get('Tiêu đề', ''),
-                "full_name": profile_row .get('Họ và tên', ''),
-                "losing_year": profile_row .get('Năm thất lạc', ''),
-                "born_year": profile_row .get('Năm sinh', ''),
-                "name_of_father": profile_row .get('Tên cha', ''),
-                "name_of_mother": profile_row .get('Tên mẹ', ''),
-                "siblings": profile_row .get('Anh chị em', ''),
-                "detail": str(profile_row .get('Chi tiet_merged', '')),
-            })
-
-        detailed_results = [result for result in detailed_results if result['id'] != str(profile.id)]
-        print("Tìm theo truy vấn detailed_results (trong quá trình tạo):", detailed_results)
+            # Cập nhật các trường đã trích xuất vào validated_data (dù có hay không)
+            for field in ['full_name', 'siblings', 'name_of_father', 'name_of_mother', 'born_year', 'losing_year', 'title']:
+                serializer.validated_data[field] = extracted_info.get(field, "")
         
-        # Lấy các đối tượng Profile tương ứng
-        similar_profiles = ProfileModel.objects.filter(id__in=[int(result['id']) for result in detailed_results])
+            # Tạo mô tả đầy đủ
+            full_description = self.generate_full_description(description, extracted_info)
+            serializer.validated_data['description'] = full_description
         
-        # Tạo thông báo cho người tạo hồ sơ mới
-        if similar_profiles:
-            # Danh sách thông tin của các hồ sơ khớp để hiển thị trong thông báo
-            match_info = [{"id": p.id, "title": p.title} for p in similar_profiles]
-            
-            # Gửi thông báo cho người tạo hồ sơ
+            # Thông báo đã tạo mô tả đầy đủ
+            from notifications.utils import create_notification
             create_notification(
                 user=self.request.user,
-                notification_type='profile_created_with_matches',
-                content=f'Hồ sơ "{profile.title}" đã được tạo thành công với {len(similar_profiles) - 1} gợi ý phù hợp.',
-                related_entity_id=profile.id,
+                notification_type='profile_creating',
+                content=f'Hồ sơ đã được tạo thành công.',
                 additional_data={
-                    'matching_profiles': match_info,
-                    'profile_id': profile.id
+                    'text': f'Hồ sơ đã được tạo thành công với mô tả đầy đủ: {full_description}',
                 }
             )
-        else:
-            # Thông báo khi không có hồ sơ phù hợp
+        
+            # Lưu profile
+            profile = serializer.save(user=self.request.user)
+
+            # Thông báo đã lưu profile
+            from notifications.utils import create_notification
             create_notification(
                 user=self.request.user,
-                notification_type='profile_created',
-                content=f'Hồ sơ "{profile.title}" đã được tạo thành công.',
-                related_entity_id=profile.id
+                notification_type='profile_creating',
+                content=f'Hồ sơ đã được lưu tạm thời thành công.',
+                additional_data={
+                    'text': f'Hồ sơ đã được lưu tạm thời thành công với mô tả đầy đủ: {full_description}',
+                }
             )
-        
-        # Thêm từng cặp vào bảng ProfileMatchSuggestion nếu chưa tồn tại
-        # và gửi thông báo cho chủ sở hữu của hồ sơ phù hợp
-        for similar in similar_profiles:
-            # Bỏ qua nếu profile1 và profile2 là cùng một hồ sơ phù hợp
-            if profile.id == similar.id:
-                continue
-                
-            # Kiểm tra xem đã tồn tại gợi ý nào chưa
-            exists = ProfileMatchSuggestion.objects.filter(
-                Q(profile1=profile, profile2=similar) | 
-                Q(profile1=similar, profile2=profile)
-            ).exists()
             
-            if not exists:
-                # Tạo gợi ý match
-                suggestion = ProfileMatchSuggestion.objects.create(
-                    profile1=profile,
-                    profile2=similar
-                )
-                
-                # Gửi thông báo cho chủ sở hữu của hồ sơ được khớp
-                if hasattr(similar, 'user') and similar.user:
+            # Xử lý embedding và vector search
+            detail_text = getattr(profile, DETAIL_COLUMN_NAME, None)
+            if not detail_text:
+                detail_text = profile.description
+
+            embedding = get_embedding(
+                detail_text,
+                task_type="RETRIEVAL_DOCUMENT"
+            )
+
+            if embedding:
+                collection = initialize_vector_db()
+                metadata = {
+                    "Tiêu đề": profile.title or "",
+                    "Họ và tên": profile.full_name or "",
+                    "Năm sinh": getattr(profile, "born_year", "") or "",
+                    "Năm thất lạc": getattr(profile, "losing_year", "") or "",
+                    "id": profile.id if profile.id is not None else "",
+                }
+                try:
+                    collection.upsert(
+                        ids=[str(profile.id)],
+                        embeddings=[embedding],
+                        metadatas=[metadata]
+                    )
+                    print(f"Profile {profile.id} embedded and upserted into ChromaDB.")
+
+                    # Thông báo đã lưu profile
+                    from notifications.utils import create_notification
                     create_notification(
-                        user=similar.user,
-                        notification_type='new_match',
-                        content=f'Có hồ sơ mới "{profile.title}" phù hợp với hồ sơ "{similar.title}" của bạn.',
-                        related_entity_id=profile.id,
+                        user=self.request.user,
+                        notification_type='profile_creating',
+                        content=f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công.',
                         additional_data={
-                            'matching_profile_id': profile.id,
-                            'matching_profile_title': profile.title,
-                            'your_profile_id': similar.id,
-                            'your_profile_title': similar.title,
-                            'suggestion_id': suggestion.id
+                            'text': f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công với mô tả đầy đủ',
                         }
                     )
+                except Exception as e:
+                    print(f"Error upserting profile {profile.id} into ChromaDB: {e}")
+            else:
+                print(f"Could not create embedding for profile {profile.id}.")
+                
+            # --- Gợi ý hồ sơ tương tự và lưu vào bảng ProfileMatchSuggestion ---
+            from profiles.models import ProfileMatchSuggestion, Profile as ProfileModel
+            from notifications.utils import create_notification
+            from django.db.models import Q
+            
+            # Lấy toàn bộ profiles dưới dạng DataFrame
+            collection = initialize_vector_db()
+            if collection is None:
+                return Response({"error": "Vector DB unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            df = fetch_profiles_from_db()
+            if df.empty:
+                return Response({"error": "No profiles found in database."}, status=status.HTTP_404_NOT_FOUND)
+            else:
+                from notifications.utils import create_notification
+                create_notification(
+                    user=self.request.user,
+                    notification_type='profile_creating',
+                    content=f'Đang tải toàn bộ hồ sơ từ cơ sở dữ liệu...',
+                    additional_data={
+                        'text': f'Đang tải toàn bộ hồ sơ từ cơ sở dữ liệu...',
+                    }
+                )
+            
+            # Sử dụng mô tả chi tiết để tìm kiếm các hồ sơ phù hợp nhất
+            id_list = search_combined_chroma(
+                df, collection, detail_text, top_n_final=100, return_json=True, user=self.request.user
+            )
+            if not id_list:
+                return Response({"results": []})
+
+            # For each ID, build a detailed result dict
+            detailed_results = []
+            for idx in id_list:
+                # idx may be string or int, ensure correct type for DataFrame lookup
+                try:
+                    profile_row = df.loc[int(idx)] if int(idx) in df.index else df[df['id'] == int(idx)].iloc[0]
+                except Exception:
+                    continue
+
+                detailed_results.append({
+                    "id": profile_row .get('id', ''),
+                    "title": profile_row .get('Tiêu đề', ''),
+                    "full_name": profile_row .get('Họ và tên', ''),
+                    "losing_year": profile_row .get('Năm thất lạc', ''),
+                    "born_year": profile_row .get('Năm sinh', ''),
+                    "name_of_father": profile_row .get('Tên cha', ''),
+                    "name_of_mother": profile_row .get('Tên mẹ', ''),
+                    "siblings": profile_row .get('Anh chị em', ''),
+                    "detail": str(profile_row .get('Chi tiet_merged', '')),
+                })
+
+            detailed_results = [result for result in detailed_results if result['id'] != str(profile.id)]
+            print("Tìm theo truy vấn detailed_results (trong quá trình tạo):", detailed_results)
+            
+            # Lấy các đối tượng Profile tương ứng
+            similar_profiles = ProfileModel.objects.filter(id__in=[int(result['id']) for result in detailed_results])
+            
+            # Tạo thông báo cho người tạo hồ sơ mới
+            if similar_profiles:
+                # Danh sách thông tin của các hồ sơ khớp để hiển thị trong thông báo
+                match_info = [{"id": p.id, "title": p.title} for p in similar_profiles]
+                
+                # Gửi thông báo cho người tạo hồ sơ
+                create_notification(
+                    user=self.request.user,
+                    notification_type='profile_created_with_matches',
+                    content=f'Hồ sơ "{profile.title}" đã được tạo thành công với {len(similar_profiles) - 1} gợi ý phù hợp.',
+                    related_entity_id=profile.id,
+                    additional_data={
+                        'matching_profiles': match_info,
+                        'profile_id': profile.id
+                    }
+                )
+            else:
+                # Thông báo khi không có hồ sơ phù hợp
+                create_notification(
+                    user=self.request.user,
+                    notification_type='profile_created',
+                    content=f'Hồ sơ "{profile.title}" đã được tạo thành công.',
+                    related_entity_id=profile.id
+                )
+            
+            # Thêm từng cặp vào bảng ProfileMatchSuggestion nếu chưa tồn tại
+            # và gửi thông báo cho chủ sở hữu của hồ sơ phù hợp
+            for similar in similar_profiles:
+                # Bỏ qua nếu profile1 và profile2 là cùng một hồ sơ phù hợp
+                if profile.id == similar.id:
+                    continue
+                    
+                # Kiểm tra xem đã tồn tại gợi ý nào chưa
+                exists = ProfileMatchSuggestion.objects.filter(
+                    Q(profile1=profile, profile2=similar) | 
+                    Q(profile1=similar, profile2=profile)
+                ).exists()
+                
+                if not exists:
+                    # Tạo gợi ý match
+                    suggestion = ProfileMatchSuggestion.objects.create(
+                        profile1=profile,
+                        profile2=similar
+                    )
+                    
+                    # Gửi thông báo cho chủ sở hữu của hồ sơ được khớp
+                    if hasattr(similar, 'user') and similar.user:
+                        create_notification(
+                            user=similar.user,
+                            notification_type='new_match',
+                            content=f'Có hồ sơ mới "{profile.title}" phù hợp với hồ sơ "{similar.title}" của bạn.',
+                            related_entity_id=profile.id,
+                            additional_data={
+                                'matching_profile_id': profile.id,
+                                'matching_profile_title': profile.title,
+                                'your_profile_id': similar.id,
+                                'your_profile_title': similar.title,
+                                'suggestion_id': suggestion.id
+                            }
+                        )
+            
+            # Lưu lại danh sách các hồ sơ tương tự để sử dụng trong create() method
+            self.similar_profiles = similar_profiles
+            return profile
         
-        # Lưu lại danh sách các hồ sơ tương tự để sử dụng trong create() method
-        self.similar_profiles = similar_profiles
-        return profile
+        finally:
+            # Xóa người dùng khỏi hàng đợi sau khi tìm kiếm xong
+            remove_user_from_queue(user_id)
 
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
@@ -715,12 +717,13 @@ class ProfileViewSet(viewsets.ModelViewSet):
         
         result = []
         for suggestion in suggestions:
-            # Hồ sơ được gợi ý chính là profile2 của bản ghi suggestion
-            result.append(suggestion.profile2)
+            profile_data = ProfileSerializer(suggestion.profile2, context={'request': request}).data
+            # Thêm thông tin match_status và suggestion_id
+            profile_data['match_status'] = suggestion.match_status
+            profile_data['suggestion_id'] = suggestion.id
+            result.append(profile_data)
         
-        # Luôn truyền request vào context để tính toán is_owner
-        serializer = ProfileSerializer(result, many=True, context={'request': request})
-        return Response(serializer.data)
+        return Response(result)
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
     def all_suggested_profiles(self, request):
@@ -1043,14 +1046,13 @@ class ProfileMatchSuggestionViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=True, methods=['post'])
     def update_status(self, request, pk=None):
+        print("Request data:", request.data)
         suggestion = self.get_object()
-        status = request.data.get('status')
-        
-        if status not in ['accepted', 'rejected']:
-            return Response({"error": "Invalid status"}, status=status.HTTP_400_BAD_REQUEST)
-        
-        suggestion.match_status = status
+        match_status = request.data.get('match_status')
+        print("Status:", match_status)
+        if match_status not in ['accepted', 'rejected', 'pending']:
+            return Response({"error": "Invalid status"}, status=400)
+        suggestion.match_status = match_status
         suggestion.save()
-        
         serializer = self.get_serializer(suggestion)
         return Response(serializer.data)

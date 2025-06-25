@@ -5,7 +5,7 @@ from .views import ProfileViewSet, ProfileMatchSuggestionViewSet # Make sure to 
 router = DefaultRouter()
 router.register(r'profiles', ProfileViewSet, basename='profile')
 # If you have ProfileMatchSuggestionViewSet, register it as well
-# router.register(r'profile-match-suggestions', ProfileMatchSuggestionViewSet, basename='profilematchsuggestion')
+router.register(r'profile-match-suggestion', ProfileMatchSuggestionViewSet, basename='profilematchsuggestion')
 
 
 urlpatterns = [

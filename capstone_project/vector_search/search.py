@@ -7,7 +7,7 @@ from .config import DETAIL_COLUMN_NAME
 from .embedding import get_embedding
 from .llm_utils import extract_keywords_gemini, parallel_verify
 
-def search_combined_chroma(df_original, collection, user_query, top_n_final=200, return_json=False, user=None):
+def search_combined_chroma(df_original, collection, user_query, top_n_final=100, return_json=False, user=None):
     """
     Thực hiện tìm kiếm kết hợp:
     1. Tìm tất cả hồ sơ có ít nhất 1 từ khóa trùng khớp

@@ -32,6 +32,7 @@ urlpatterns = [
     path('api/notifications/', include('notifications.urls')),
     path('api/chats/', include('chats.urls')),
     path('api/recently-missing/', include('recently_missing.urls')),
+    path('api/', include('comments.urls')),
 ]
 
 # Serve media files in development

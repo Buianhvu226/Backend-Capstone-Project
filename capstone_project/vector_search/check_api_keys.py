@@ -2,6 +2,8 @@ import requests
 import os
 import time
 import sys # Import the sys module
+import django
+from pathlib import Path
 
 # --- Add project root to sys.path ---
 # Calculate the path to the 'capstone_project' directory (two levels up from this file)
@@ -11,7 +13,14 @@ if project_root not in sys.path:
     sys.path.insert(0, project_root)
 # --- End of addition ---
 
-# Now the absolute import should work
+# Thêm thư mục project vào Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+# Thiết lập Django settings
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'capstone_project.settings')
+django.setup()
+
+from django.conf import settings
 from vector_search.config import GEMINI_API_KEYS
 
 # --- Configuration ---

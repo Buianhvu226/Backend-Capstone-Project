@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Notification
 from .serializers import NotificationSerializer
+from rest_framework.permissions import IsAdminUser
 
 class NotificationViewSet(viewsets.ModelViewSet):
     serializer_class = NotificationSerializer
@@ -41,3 +42,9 @@ class NotificationViewSet(viewsets.ModelViewSet):
             serializer = self.get_serializer(queryset, many=True)
             return Response(serializer.data)
         return Response({"error": "Type parameter is required"}, status=status.HTTP_400_BAD_REQUEST)
+    
+    @action(detail=False, methods=['delete'], permission_classes=[IsAdminUser])
+    def delete_profile_creating_all(self, request):
+        """Admin xóa tất cả thông báo có type là 'profile_creating' của mọi user"""
+        deleted_count, _ = Notification.objects.filter(type="profile_creating").delete()
+        return Response({'deleted': deleted_count}, status=status.HTTP_200_OK)

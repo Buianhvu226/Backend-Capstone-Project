@@ -82,7 +82,7 @@ class ProfileMatchSuggestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProfileMatchSuggestion
         fields = [
-            'id', 'profile1', 'profile2', 'match_score', 'match_status', 
+            'id', 'profile1', 'profile2', 'match_status', 
             'created_at', 'profile1_details', 'profile2_details'
         ]
         read_only_fields = ['id', 'created_at', 'profile1_details', 'profile2_details']
