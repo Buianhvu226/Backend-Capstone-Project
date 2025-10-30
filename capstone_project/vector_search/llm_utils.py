@@ -40,36 +40,65 @@ Chi tiết: {detail}
 {"-"*40}"""
         profile_strings.append(profile_str)
 
-    prompt = f"""Bạn là một chuyên gia phân tích hồ sơ tìm kiếm người thân thất lạc cực kỳ tỉ mỉ và chính xác. Nhiệm vụ của bạn là phân tích các hồ sơ dưới đây và chỉ xác định những hồ sơ nào mô tả **chính xác cùng một người** và **cùng một hoàn cảnh thất lạc** như được nêu trong Yêu cầu tìm kiếm.
+    prompt = f"""Bạn là chuyên gia phân tích hồ sơ tìm kiếm người thân thất lạc với khả năng nhận diện pattern phức tạp. Nhiệm vụ của bạn là tìm những hồ sơ có khả năng mô tả **cùng một người** và **cùng một hoàn cảnh thất lạc** với yêu cầu tìm kiếm bên dưới.
 
-Hãy so sánh **cực kỳ cẩn thận** các chi tiết nhận dạng cốt lõi:
-- **Họ tên người thất lạc:** Phải khớp hoặc rất tương đồng.
-- **Tên cha, mẹ, anh chị em (nếu có trong yêu cầu):** Phải khớp hoặc rất tương đồng.
-- **Năm sinh:** Phải khớp hoặc gần đúng.
-- **Quê quán/Địa chỉ liên quan:** Phải khớp hoặc có liên quan logic.
-- **Hoàn cảnh thất lạc (thời gian, địa điểm, sự kiện chính):** Phải tương đồng đáng kể.
-- **Sự kiện, manh mối hoặc đặc điểm nhận dạng đặc biệt trong mô tả (thời gian, địa điểm, sự kiện chính, ký ức, đặc điểm,...):** Phải tương đồng đáng kể.
+## CÁC YẾU TỐ QUAN TRỌNG (THEO MỨC ĐỘ ƯU TIÊN):
 
-**Quy tắc loại trừ quan trọng:**
-- Nếu **Họ tên người thất lạc** trong hồ sơ **khác biệt rõ ràng** so với yêu cầu, hãy **LOẠI BỎ** hồ sơ đó NGAY LẬP TỨC, bất kể các chi tiết khác có trùng khớp hay không.
-- Nếu **tên cha mẹ hoặc anh chị em** (khi được cung cấp trong yêu cầu) trong hồ sơ **hoàn toàn khác biệt**, hồ sơ đó rất có thể **KHÔNG PHÙ HỢP** và cần được xem xét loại bỏ.
-- Sự trùng khớp **chỉ** về địa danh hoặc năm sinh là **KHÔNG ĐỦ** để kết luận hồ sơ phù hợp nếu các tên riêng cốt lõi và hoàn cảnh thất lạc khác biệt.
+### 1. **TÊN CHA/MẸ – YẾU TỐ ƯU TIÊN CAO NHẤT**
+- Ít thay đổi theo thời gian → nếu khớp chính xác, rất có khả năng cùng người
+- Nếu khác hoàn toàn → cần có các yếu tố khác để bù trừ
 
-Mỗi hồ sơ có Index gốc, Tiêu đề, Họ tên và Chi tiết mô tả.
+### 2. **TÊN ANH CHỊ EM VÀ CẤU TRÚC GIA ĐÌNH**
+- Tên, số lượng, vị trí trong gia đình ("con út", "con thứ ba")
 
+### 3. **HOÀN CẢNH THẤT LẠC**
+- Sự kiện đặc trưng: "lạc trong chiến tranh", "được đem cho đi nuôi", "bỏ nhà đi", "vượt biên", ...
+- Thời điểm: năm, độ tuổi
+- Cách thức: bị lạc, được đưa đi, chiến tranh
+
+### 4. **THÔNG TIN NGƯỜI THẤT LẠC**
+- Chú ý ràng tên có thể thay đổi do: nhận nuôi, đặt lại tên, biệt danh, ...
+- Nếu khác tên nhưng các yếu tố khác khớp → vẫn coi là khả năng cao
+- Đặc điểm nhận dạng đặc biệt trước khi thất lạc: "tật ở chân", "sẹo", "vết bớt", ...
+
+### 5. **THÔNG TIN ĐỊA LÝ**
+- Địa điểm thất lạc, nơi sinh sống trước đó, tỉnh/thành gốc
+
+### 6. **HOÀN CẢNH GIA ĐÌNH**
+- Nghề nghiệp cha mẹ, điều kiện xã hội (chiến tranh, di cư...)
+
+## NGUYÊN TẮC ĐÁNH GIÁ:
+
+### **NÊN GỢI Ý** khi:
+- Có **ít nhất 2 yếu tố quan trọng khớp rõ ràng**
+- Không có mâu thuẫn lớn về thời gian, địa điểm
+- Có logic hợp lý giữa các chi tiết (vd: cùng thời điểm, cùng sự kiện đặc biệt, manh mối rõ ràng)
+
+### **LOẠI BỎ NGAY** nếu:
+- Tên cha mẹ hoàn toàn khác
+- Hoàn cảnh thất lạc hoặc thời gian khác biệt rõ ràng
+
+## LƯU Ý QUAN TRỌNG:
+
+- Chỉ gợi ý hồ sơ nếu bạn **thật sự thấy có khả năng liên quan**.  
+- Nếu có nhiều hồ sơ phù hợp, **chỉ chọn tối đa 20 hồ sơ tốt nhất**, xếp theo mức độ khớp từ cao xuống thấp.  
+- Không cần cố gợi ý nếu không đủ thông tin hoặc thấy không thuyết phục.
+- Hãy đọc kỹ để hiểu rõ nội dung của từng hồ sơ để so sánh với yêu cầu tìm kiếm. Chú ý phân tích vào các thông tin, manh mối trước khi thất lạc thay vì những chi tiết sau khi thất lạc.
+- Ví dụ, nếu yêu cầu tìm kiếm là "Gia đình đang tìm con trai tên Long thất lạc năm 90 tại Sài Gòn", thì các hồ sơ có tên con trai là Long, mất tích vào khoảng năm 90, tại Sài Gòn hoặc có cha mẹ tên giống nhau sẽ được ưu tiên hơn. Các hồ sơ có tên con trai khác, thời gian và địa điểm khác biệt rõ ràng sẽ bị loại bỏ ngay.
 Yêu cầu tìm kiếm:
 {query}
 ------------------------------------
 
 Các hồ sơ cần kiểm tra:
-------------------------------------
 {"".join(profile_strings)}
-------------------------------------
 
-Hãy trả về **chỉ các Index gốc** (là các chuỗi ID dạng số) của những hồ sơ mà bạn **rất chắc chắn** (high confidence) là phù hợp dựa trên **tất cả các tiêu chí cốt lõi** nêu trên. Mỗi index trên một dòng. Nếu không có hồ sơ nào thực sự phù hợp, trả về 'none'.
+---
+
+ **Hãy trả về duy nhất danh sách các Index** của hồ sơ phù hợp, mỗi index trên một dòng. Nếu không có hồ sơ phù hợp, trả về đúng từ `none`.
 """
 
     api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+    # api_endpoint = "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent"
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": api_key,
@@ -79,7 +108,7 @@ Hãy trả về **chỉ các Index gốc** (là các chuỗi ID dạng số) c�
         # Có thể thêm generationConfig và safetySettings nếu cần
         "generationConfig": {
              "temperature": 0.2,
-             "maxOutputTokens": 1024
+             "maxOutputTokens": 100
         }
     }
 
@@ -194,9 +223,9 @@ def parallel_verify(query, ranked_profiles_data, max_profiles=300):
     return list(verified_indices_str)
 
 # --- Hàm trích xuất từ khóa từ truy vấn bằng Gemini ---
-def extract_keywords_gemini(query, model="gemini-1.5-flash-latest"): # Use a valid model name
+def extract_keywords_gemini(query, model="gemini-2.5-flash-lite-preview-06-17"): # Use a valid model name
     """Trích xuất các từ khóa quan trọng từ truy vấn bằng Gemini (có ví dụ và làm sạch)."""
-    prompt = f"""Phân tích các hồ sơ tìm kiếm người thân thất lạc sau và trích xuất các từ khóa quan trọng có thể dùng để tìm kiếm thông tin liên quan đến người mất tích. Trả về một danh sách các từ khóa và những từ có khả năng liên quan. Lưu ý tên riêng có thể phân tích nhỏ hơn thành tên riêng (ví dụ: Lê Thị Hạnh => Hạnh). Từ khóa liên quan có thể được sinh ra từ các từ khóa chính (ví dụ: chiến tranh => xung đột, chạy giặc, vượt biên, di cư,...) hoặc từ các từ khóa khác trong đoạn văn bản. Vậy nhiệm vụ của bạn là trích xuất các từ khóa quan trọng nhất có thể dùng để tìm kiếm thông tin liên quan đến người mất tích và các từ khóa liên quan có thể sinh ra từ các từ khóa chính. Các từ khóa này có thể là tên riêng, địa danh, năm sinh, địa chỉ, đặc điểm nhận dạng, ký ức hoặc các thông tin khác... . Hãy trả về danh sách các từ khóa và các từ khóa liên quan có thể sinh ra từ các từ khóa chính, mỗi từ khóa cách nhau bởi dấu phẩy.
+    prompt = f"""Phân tích yêu cầu / hồ sơ tìm kiếm người thân thất lạc sau và trích xuất các từ khóa quan trọng có thể dùng để tìm kiếm thông tin liên quan đến người mất tích. Trả về một danh sách các từ khóa và những từ có khả năng liên quan. Lưu ý tên riêng có thể phân tích nhỏ hơn thành tên riêng (ví dụ: Lê Thị Hạnh => Hạnh). Từ khóa liên quan có thể được sinh ra từ các từ khóa chính (ví dụ: chiến tranh => xung đột, chạy giặc, vượt biên, di cư,...) hoặc từ các từ khóa khác trong đoạn văn bản. Vậy nhiệm vụ của bạn là trích xuất các từ khóa quan trọng nhất có thể dùng để tìm kiếm thông tin liên quan đến người mất tích và các từ khóa liên quan có thể sinh ra từ các từ khóa chính. Các từ khóa này có thể là tên riêng, địa danh, năm sinh, địa chỉ, đặc điểm nhận dạng, ký ức hoặc các thông tin khác... . Hãy trả về danh sách các từ khóa và các từ khóa liên quan có thể sinh ra từ các từ khóa chính, mỗi từ khóa cách nhau bởi dấu phẩy.
 
 Ví dụ 1:
 Đoạn văn bản: Chị Lê Thị Mỹ Duyên tìm bác Lê Viết Thi, đi vượt biên mất liên lạc khoảng năm 1978. Ông Lê Viết Thi sinh năm 1946, quê Quảng Nam. Bố mẹ là cụ Lê Viết Y và cụ Nguyễn Thị Ca. Anh chị em trong gia đình là Viết, Thơ, Dũng, Chung, Mười, Sỹ và Tượng. Khoảng năm 1978, ông Lê Viết Thi đi vượt biên. Từ đó, gia đình không còn nghe tin tức gì về ông.
@@ -210,7 +239,7 @@ Ví dụ 3:
 Đoạn văn bản: Chị Nguyễn Thị Yến tìm ba Nguyễn Văn Đã mất liên lạc năm 1977. Ông Nguyễn Văn Đã, sinh năm 1939, không rõ quê quán. Khoảng năm 1970, bà Vũ Thị Hải gặp ông Nguyễn Văn Đã ở nông trường Sao Đỏ tại Mộc Châu, Sơn La. Ông Đã phụ trách lái xe lương thực cho nông trường. Sau khi sinh chị Yến, ông muốn đưa hai mẹ con về quê ông nhưng bà Hải biết ông Đã đã có vợ ở quê nên không đồng ý và đem con về khu tập thể nhà máy nước Nam Định. Ông Đã vẫn thường lái xe về thăm con gái. Năm 1979, bà Hải mang con về quê bà sinh sống, từ đó chị Yến không hay tin gì về ba nữa.
 Các từ khóa quan trọng: Nguyễn Thị Yến, Yến, Nguyễn Văn Đã, Đã, 1977, 1939, 1970, Vũ Thị Hải, Hải, nông trường, Sao Đỏ, Mộc Châu, Sơn La, lái xe, lương thực, nông trường, làm nông, nông nghiệp, khu tập thể, nhà máy nước, Nam Định, 1979
 
-*Chú ý: những từ khóa nào phổ biến, phổ thông quá thì bỏ qua như: gia đình, anh, em, vợ, chồng, tìm kiếm, thất lạc, mất tích, mất liên lạc, không rõ quê quán, không rõ địa chỉ, không rõ thông tin, không rõ năm sinh, không rõ đặc điểm nhận dạng, không rõ ký ức...
+*Chú ý: những từ khóa nào phổ biến, phổ thông quá thì bỏ qua như: gia đình, anh, em, vợ, chồng, tìm kiếm, thất lạc, mất tích, mất liên lạc, không rõ quê quán, không rõ địa chỉ, không rõ thông tin, không rõ năm sinh, không rõ đặc điểm nhận dạng, không rõ ký ức... . Và nên lấy các từ khóa, thông tin, từ những nội dung chi tiết hồ sơ trước khi thất lạc.
 
 Đoạn văn bản hiện tại:
 {query}

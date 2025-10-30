@@ -3,7 +3,7 @@ from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 
 class Profile(models.Model):
-    id = models.IntegerField(primary_key=True)  # Thêm dòng này, tự quản lý id
+    id = models.IntegerField(primary_key=True)
     
     STATUS_CHOICES = (
         ('active', _('Active')),

@@ -185,12 +185,12 @@ class ProfileSearchAPIView(APIView):
                 return Response({"error": "Missing or empty 'query'."}, status=status.HTTP_400_BAD_REQUEST)
 
             # Kiểm duyệt nội dung trước khi xử lý
-            is_appropriate, feedback = self.moderate_content(user_query)
-            if not is_appropriate:
-                # Trả về lỗi nếu nội dung không phù hợp
-                return Response({
-                    "error": f"Nội dung tìm kiếm không phù hợp: {feedback}"
-                }, status=status.HTTP_400_BAD_REQUEST)
+            # is_appropriate, feedback = self.moderate_content(user_query)
+            # if not is_appropriate:
+            #     # Trả về lỗi nếu nội dung không phù hợp
+            #     return Response({
+            #         "error": f"Nội dung tìm kiếm không phù hợp: {feedback}"
+            #     }, status=status.HTTP_400_BAD_REQUEST)
 
             # Initialize vector DB and fetch profiles
             collection = initialize_vector_db()

@@ -105,7 +105,7 @@ class ProfileViewSet(viewsets.ModelViewSet):
                 return True, ""  # Mặc định cho phép nếu không có API key
                 
             # Cấu hình API endpoint và headers
-            api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
             headers = {
                 "Content-Type": "application/json",
                 "x-goog-api-key": PRIMARY_GOOGLE_API_KEY,
@@ -290,7 +290,7 @@ class ProfileViewSet(viewsets.ModelViewSet):
                 return {}
                 
             # Cấu hình API endpoint và headers
-            api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+            api_endpoint = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
             headers = {
                 "Content-Type": "application/json",
                 "x-goog-api-key": PRIMARY_GOOGLE_API_KEY,
@@ -300,7 +300,7 @@ class ProfileViewSet(viewsets.ModelViewSet):
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {
-                    "temperature": 0.3,
+                    "temperature": 0.5,
                     "maxOutputTokens": 1024,
                 }
             }
@@ -454,23 +454,25 @@ class ProfileViewSet(viewsets.ModelViewSet):
             description = serializer.validated_data.get('description', '')
         
             # Kiểm duyệt nội dung trước khi xử lý
-            is_appropriate, feedback = self.moderate_content(description)
-            if not is_appropriate:
-                # Thông báo nội dung không phù hợp
-                from notifications.utils import create_notification
-                create_notification(
-                    user=self.request.user,
-                    notification_type='profile_creating_failed',
-                    content= f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
-                    additional_data={
-                        'text': f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
-                    }
-                )
-                # Trả về lỗi
-                from rest_framework.exceptions import ValidationError
-                raise ValidationError({
-                    "description": f"Nội dung không phù hợp để đăng lên hệ thống: {feedback}"
-                })
+            # is_appropriate, feedback = self.moderate_content(description)
+            # if not is_appropriate:
+            #     # Thông báo nội dung không phù hợp
+            #     from notifications.utils import create_notification
+            #     create_notification(
+            #         user=self.request.user,
+            #         notification_type='profile_creating_failed',
+            #         content= f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
+            #         additional_data={
+            #             'text': f'Nội dung không phù hợp để đăng lên hệ thống: {feedback}',
+            #         }
+            #     )
+            #     # Trả về lỗi
+            #     from rest_framework.exceptions import ValidationError
+            #     raise ValidationError({
+            #         "description": f"Nội dung không phù hợp để đăng lên hệ thống: {feedback}"
+            #     })
+            # Dừng trong 2 giây để tránh quá tải API
+            # time.sleep(2)
         
             # Trích xuất thông tin từ tiêu đề và mô tả
             extracted_info = self.extract_profile_info(description)
@@ -722,7 +724,8 @@ class ProfileViewSet(viewsets.ModelViewSet):
             profile_data['match_status'] = suggestion.match_status
             profile_data['suggestion_id'] = suggestion.id
             result.append(profile_data)
-        
+
+        result.reverse()
         return Response(result)
     
     @action(detail=False, methods=['get'], permission_classes=[IsAuthenticated])
