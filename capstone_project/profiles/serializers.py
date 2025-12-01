@@ -7,6 +7,7 @@ class ProfileSerializer(serializers.ModelSerializer):
     user_id = serializers.SerializerMethodField()
     images = serializers.SerializerMethodField()  # Vẫn giữ tên là images để tương thích với code hiện tại
     is_owner = serializers.SerializerMethodField()
+    match_count = serializers.SerializerMethodField()  # Số lượng hồ sơ liên quan
     
     class Meta:
         model = Profile
@@ -15,7 +16,7 @@ class ProfileSerializer(serializers.ModelSerializer):
                   'username',       
                   'title', 'full_name', 'born_year', 'losing_year', 
                   'name_of_father', 'name_of_mother', 'siblings', 'description', 
-                  'status', 'created_at', 'is_owner', 'images']
+                  'status', 'created_at', 'is_owner', 'images', 'match_count']
     
     def get_username(self, obj):
         """Lấy username an toàn"""
@@ -42,6 +43,18 @@ class ProfileSerializer(serializers.ModelSerializer):
         if request and hasattr(request, 'user'):
             return obj.user == request.user
         return False
+    
+    def get_match_count(self, obj):
+        """Lấy số lượng hồ sơ liên quan (số ProfileMatchSuggestion)"""
+        # Nếu đã có annotation match_count từ queryset, sử dụng nó
+        if hasattr(obj, 'match_count'):
+            return obj.match_count
+        # Nếu chưa có, tính toán lại bằng cách đếm số ProfileMatchSuggestion
+        from django.db.models import Q
+        count = ProfileMatchSuggestion.objects.filter(
+            Q(profile1=obj) | Q(profile2=obj)
+        ).count()
+        return count
 
 class ProfileCreateSerializer(serializers.ModelSerializer):
     images = serializers.ListField(

@@ -223,7 +223,7 @@ def parallel_verify(query, ranked_profiles_data, max_profiles=300):
     return list(verified_indices_str)
 
 # --- Hàm trích xuất từ khóa từ truy vấn bằng Gemini ---
-def extract_keywords_gemini(query, model="gemini-2.5-flash-lite-preview-06-17"): # Use a valid model name
+def extract_keywords_gemini(query, model="gemini-2.5-flash"): # Use a valid model name
     """Trích xuất các từ khóa quan trọng từ truy vấn bằng Gemini (có ví dụ và làm sạch)."""
     prompt = f"""Phân tích yêu cầu / hồ sơ tìm kiếm người thân thất lạc sau và trích xuất các từ khóa quan trọng có thể dùng để tìm kiếm thông tin liên quan đến người mất tích. Trả về một danh sách các từ khóa và những từ có khả năng liên quan. Lưu ý tên riêng có thể phân tích nhỏ hơn thành tên riêng (ví dụ: Lê Thị Hạnh => Hạnh). Từ khóa liên quan có thể được sinh ra từ các từ khóa chính (ví dụ: chiến tranh => xung đột, chạy giặc, vượt biên, di cư,...) hoặc từ các từ khóa khác trong đoạn văn bản. Vậy nhiệm vụ của bạn là trích xuất các từ khóa quan trọng nhất có thể dùng để tìm kiếm thông tin liên quan đến người mất tích và các từ khóa liên quan có thể sinh ra từ các từ khóa chính. Các từ khóa này có thể là tên riêng, địa danh, năm sinh, địa chỉ, đặc điểm nhận dạng, ký ức hoặc các thông tin khác... . Hãy trả về danh sách các từ khóa và các từ khóa liên quan có thể sinh ra từ các từ khóa chính, mỗi từ khóa cách nhau bởi dấu phẩy.
 

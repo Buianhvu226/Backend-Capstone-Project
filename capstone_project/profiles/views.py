@@ -1,7 +1,7 @@
 from rest_framework import viewsets, permissions, status, filters
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from django.db.models import Q
+from rest_framework.pagination import PageNumberPagination
 from .models import Profile, ProfileMatchSuggestion, ProfileImage
 from .serializers import ProfileSerializer, ProfileCreateSerializer, ProfileMatchSuggestionSerializer
 from notifications.utils import create_notification
@@ -19,9 +19,15 @@ from rest_framework.permissions import IsAuthenticated  # <-- Add this import
 from django_filters.rest_framework import DjangoFilterBackend
 import django_filters
 from datetime import datetime
-from django.db.models import Count
+from django.db.models import Q, Count, F
 from queue_list.queue import add_user_to_queue, remove_user_from_queue, is_user_turn
 import time
+
+# Define pagination class for ProfileViewSet
+class ProfilePagination(PageNumberPagination):
+    page_size = 30
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 # Define ProfileFilter class
 class ProfileFilter(django_filters.FilterSet):
@@ -62,12 +68,36 @@ class IsOwnerOrReadOnly(permissions.BasePermission):
         return obj.user == request.user
 
 class ProfileViewSet(viewsets.ModelViewSet):
-    queryset = Profile.objects.all().order_by('-created_at') # Sắp xếp theo created_at giảm dần
+    queryset = Profile.objects.all()
     # permission_classes = [permissions.IsAuthenticated, IsOwnerOrReadOnly] # Xóa dòng này hoặc comment lại
     filter_backends = [filters.SearchFilter, filters.OrderingFilter, DjangoFilterBackend]
     search_fields = ['title', 'full_name', 'description']
-    ordering_fields = ['created_at', 'born_year', 'losing_year']
+    # Các tùy chọn sắp xếp: created_at (mới nhất/cũ nhất), updated_at (mới cập nhật), match_count (nhiều hồ sơ liên quan)
+    ordering_fields = ['created_at', 'updated_at', 'match_count', 'born_year', 'losing_year']
+    ordering = ['-created_at']  # Mặc định sắp xếp theo mới nhất
     filterset_class = ProfileFilter
+    pagination_class = ProfilePagination
+    
+    def get_queryset(self):
+        """
+        Override để thêm annotation đếm số hồ sơ liên quan (số ProfileMatchSuggestion)
+        """
+        queryset = super().get_queryset()
+        
+        # Đếm số ProfileMatchSuggestion mà profile tham gia (cả profile1 và profile2)
+        # Đếm từng phía riêng biệt
+        count_as_profile1 = Count('suggestions_as_profile1', distinct=True)
+        count_as_profile2 = Count('suggestions_as_profile2', distinct=True)
+        
+        # Cộng hai annotation lại với nhau
+        queryset = queryset.annotate(
+            count_as_p1=count_as_profile1,
+            count_as_p2=count_as_profile2
+        ).annotate(
+            match_count=F('count_as_p1') + F('count_as_p2')
+        )
+        
+        return queryset
     def get_serializer_class(self):
         if self.action == 'create' or self.action == 'update' or self.action == 'partial_update':
             return ProfileCreateSerializer
