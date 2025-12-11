@@ -14,6 +14,10 @@ from vector_search.views_api import ProfileSearchAPIView
 from vector_search.db_utils import fetch_profiles_from_db
 from vector_search.embedding import initialize_vector_db
 from vector_search.search import search_combined_chroma
+from vector_search.qdrant_helper import get_qdrant_client, get_qdrant_collection
+from vector_search.config import USE_QDRANT, QDRANT_COLLECTION_NAME
+from qdrant_client.models import PointStruct
+from qdrant_client.http import models as qdrant_models
 from rest_framework.permissions import AllowAny
 from rest_framework.permissions import IsAuthenticated  # <-- Add this import
 from django_filters.rest_framework import DjangoFilterBackend
@@ -562,34 +566,76 @@ class ProfileViewSet(viewsets.ModelViewSet):
             )
 
             if embedding:
-                collection = initialize_vector_db()
-                metadata = {
-                    "Tiêu đề": profile.title or "",
-                    "Họ và tên": profile.full_name or "",
-                    "Năm sinh": getattr(profile, "born_year", "") or "",
-                    "Năm thất lạc": getattr(profile, "losing_year", "") or "",
-                    "id": profile.id if profile.id is not None else "",
-                }
                 try:
-                    collection.upsert(
-                        ids=[str(profile.id)],
-                        embeddings=[embedding],
-                        metadatas=[metadata]
-                    )
-                    print(f"Profile {profile.id} embedded and upserted into ChromaDB.")
+                    if USE_QDRANT:
+                        # Thêm vào Qdrant
+                        qdrant_client = get_qdrant_client()
+                        collection_name = get_qdrant_collection()
+                        if qdrant_client and collection_name:
+                            # Chuẩn bị metadata cho Qdrant (payload)
+                            payload = {
+                                "Tiêu đề": profile.title or "",
+                                "Họ và tên": profile.full_name or "",
+                                "Năm sinh": str(getattr(profile, "born_year", "") or ""),
+                                "Năm thất lạc": str(getattr(profile, "losing_year", "") or ""),
+                                "id": str(profile.id) if profile.id is not None else "",
+                            }
+                            
+                            # Tạo point để upsert vào Qdrant
+                            point = PointStruct(
+                                id=int(profile.id),  # Qdrant yêu cầu integer ID
+                                vector=embedding,
+                                payload=payload
+                            )
+                            
+                            qdrant_client.upsert(
+                                collection_name=collection_name,
+                                points=[point]
+                            )
+                            print(f"Profile {profile.id} embedded and upserted into Qdrant.")
 
-                    # Thông báo đã lưu profile
-                    from notifications.utils import create_notification
-                    create_notification(
-                        user=self.request.user,
-                        notification_type='profile_creating',
-                        content=f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công.',
-                        additional_data={
-                            'text': f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công với mô tả đầy đủ',
+                            # Thông báo đã lưu profile
+                            from notifications.utils import create_notification
+                            create_notification(
+                                user=self.request.user,
+                                notification_type='profile_creating',
+                                content=f'Hồ sơ {profile.title} đã được lưu vào Qdrant thành công.',
+                                additional_data={
+                                    'text': f'Hồ sơ {profile.title} đã được lưu vào Qdrant thành công với mô tả đầy đủ',
+                                }
+                            )
+                        else:
+                            print(f"Qdrant client or collection unavailable. Cannot upsert profile {profile.id}.")
+                    else:
+                        # Fallback: Thêm vào ChromaDB (nếu không dùng Qdrant)
+                        collection = initialize_vector_db()
+                        metadata = {
+                            "Tiêu đề": profile.title or "",
+                            "Họ và tên": profile.full_name or "",
+                            "Năm sinh": getattr(profile, "born_year", "") or "",
+                            "Năm thất lạc": getattr(profile, "losing_year", "") or "",
+                            "id": profile.id if profile.id is not None else "",
                         }
-                    )
+                        collection.upsert(
+                            ids=[str(profile.id)],
+                            embeddings=[embedding],
+                            metadatas=[metadata]
+                        )
+                        print(f"Profile {profile.id} embedded and upserted into ChromaDB.")
+
+                        # Thông báo đã lưu profile
+                        from notifications.utils import create_notification
+                        create_notification(
+                            user=self.request.user,
+                            notification_type='profile_creating',
+                            content=f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công.',
+                            additional_data={
+                                'text': f'Hồ sơ {profile.title} đã được lưu vào ChromaDB thành công với mô tả đầy đủ',
+                            }
+                        )
                 except Exception as e:
-                    print(f"Error upserting profile {profile.id} into ChromaDB: {e}")
+                    vector_db_name = "Qdrant" if USE_QDRANT else "ChromaDB"
+                    print(f"Error upserting profile {profile.id} into {vector_db_name}: {e}")
             else:
                 print(f"Could not create embedding for profile {profile.id}.")
                 
@@ -728,15 +774,34 @@ class ProfileViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()
-        profile_id = str(instance.id)
-        # Delete from ChromaDB
+        profile_id = instance.id
+        
+        # Xóa vector từ Qdrant hoặc ChromaDB
         try:
-            collection = initialize_vector_db()
-            collection.delete(ids=[profile_id])
-            print(f"Đã xóa profile {profile_id} khỏi ChromaDB.")
+            if USE_QDRANT:
+                # Xóa từ Qdrant
+                qdrant_client = get_qdrant_client()
+                collection_name = get_qdrant_collection()
+                if qdrant_client and collection_name:
+                    qdrant_client.delete(
+                        collection_name=collection_name,
+                        points_selector=qdrant_models.PointIdsList(
+                            points=[int(profile_id)]  # Qdrant yêu cầu integer ID
+                        )
+                    )
+                    print(f"Đã xóa profile {profile_id} khỏi Qdrant.")
+                else:
+                    print(f"Qdrant client hoặc collection không khả dụng. Không thể xóa profile {profile_id} khỏi Qdrant.")
+            else:
+                # Fallback: Xóa từ ChromaDB
+                collection = initialize_vector_db()
+                collection.delete(ids=[str(profile_id)])
+                print(f"Đã xóa profile {profile_id} khỏi ChromaDB.")
         except Exception as e:
-            print(f"Lỗi khi xóa profile {profile_id} khỏi ChromaDB: {e}")
-        # Delete from database
+            vector_db_name = "Qdrant" if USE_QDRANT else "ChromaDB"
+            print(f"Lỗi khi xóa profile {profile_id} khỏi {vector_db_name}: {e}")
+        
+        # Xóa từ database
         return super().destroy(request, *args, **kwargs)
     
     @action(detail=True, methods=['get'])
@@ -979,7 +1044,25 @@ class ProfileViewSet(viewsets.ModelViewSet):
         """
         Nhận URL hình ảnh từ client và lưu vào bảng ProfileImage
         """
-        profile = self.get_object()
+        # Kiểm tra pk có hợp lệ không
+        if pk is None or pk == 'undefined' or pk == '':
+            return Response(
+                {"error": "Profile ID không hợp lệ. Vui lòng cung cấp ID của hồ sơ."}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        try:
+            profile = self.get_object()
+        except Profile.DoesNotExist:
+            return Response(
+                {"error": f"Không tìm thấy hồ sơ với ID: {pk}"}, 
+                status=status.HTTP_404_NOT_FOUND
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Lỗi khi lấy thông tin hồ sơ: {str(e)}"}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
         
         # Kiểm tra quyền sở hữu profile
         if request.user != profile.user:

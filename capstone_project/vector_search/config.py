@@ -34,6 +34,26 @@ CHROMA_COLLECTION_NAME = "missing_people_profiles"
 EMBEDDING_MODEL_NAME = "models/text-embedding-004"
 DETAIL_COLUMN_NAME = "Chi tiet_merged"
 
+# --- Vector DB Selection ---
+# Mặc định dùng Qdrant, có thể chuyển về ChromaDB hoặc Pinecone bằng env vars
+USE_QDRANT = os.getenv("USE_QDRANT", "true").lower() == "true"
+USE_PINECONE = os.getenv("USE_PINECONE", "false").lower() == "true"
+USE_CHROMADB = os.getenv("USE_CHROMADB", "false").lower() == "true"
+
+# --- Qdrant Configuration ---
+QDRANT_HOST = os.getenv("QDRANT_HOST", "localhost")
+QDRANT_PORT = int(os.getenv("QDRANT_PORT", "6333"))
+QDRANT_URL = os.getenv("QDRANT_URL")  # Cloud: https://xxxxx.qdrant.io
+QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")  # Cloud API key
+QDRANT_COLLECTION_NAME = os.getenv("QDRANT_COLLECTION_NAME", "missing_people_profiles")
+
+# --- Pinecone Configuration (đã comment - không dùng nữa) ---
+# USE_PINECONE = os.getenv("USE_PINECONE", "true").lower() == "true"
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+PINECONE_INDEX_HOST = os.getenv("PINECONE_INDEX_HOST")  # v3 host dạng https://XXXX-XXXX.svc.XXXX.pinecone.io
+PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME")  # tùy chọn nếu dùng client cần tên
+PINECONE_TOP_K = int(os.getenv("PINECONE_TOP_K", "1000"))
+
 # --- LLM Configuration ---
 BATCH_SIZE_LLM = 100
 # MAX_CONCURRENT_REQUESTS_LLM = len(GEMINI_API_KEYS)

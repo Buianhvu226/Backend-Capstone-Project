@@ -4,7 +4,10 @@ from rest_framework import status
 
 from .embedding import initialize_vector_db
 from .db_utils import fetch_profiles_from_db
-from .search import search_combined_chroma
+from .search import search_combined_chroma, search_combined_qdrant, search_combined_pinecone
+from .qdrant_helper import get_qdrant_client, get_qdrant_collection
+from .config import USE_QDRANT, USE_PINECONE, USE_CHROMADB, QDRANT_COLLECTION_NAME
+# from .pinecone_client import get_pinecone_index  # Đã comment - không dùng Pinecone nữa
 import json
 import requests
 import time
@@ -192,43 +195,83 @@ class ProfileSearchAPIView(APIView):
             #         "error": f"Nội dung tìm kiếm không phù hợp: {feedback}"
             #     }, status=status.HTTP_400_BAD_REQUEST)
 
-            # Initialize vector DB and fetch profiles
-            collection = initialize_vector_db()
-            if collection is None:
-                return Response({"error": "Vector DB unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+            # Initialize vector DB và fetch profiles
             df = fetch_profiles_from_db()
             if df.empty:
                 return Response({"error": "No profiles found in database."}, status=status.HTTP_404_NOT_FOUND)
 
-            # Run the search
+            # Run the search - ưu tiên Qdrant, sau đó Pinecone, cuối cùng ChromaDB
             try:
-                # search_combined_chroma returns a list of IDs (as strings)
-                id_list = search_combined_chroma(
-                    df, collection, user_query, top_n_final=100, return_json=True, user=self.request.user
-                )
+                if USE_QDRANT:
+                    # Sử dụng Qdrant
+                    qdrant_client = get_qdrant_client()
+                    collection_name = get_qdrant_collection()
+                    if collection_name is None:
+                        return Response({"error": "Qdrant collection unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    id_list = search_combined_qdrant(
+                        df, qdrant_client, collection_name, user_query, top_n_final=100, return_json=True, user=self.request.user
+                    )
+                elif USE_PINECONE:
+                    # Sử dụng Pinecone (đã comment - không dùng nữa)
+                    # from .pinecone_client import get_pinecone_index
+                    # index = get_pinecone_index()
+                    # if index is None:
+                    #     return Response({"error": "Pinecone index unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    # from .search import search_combined_pinecone
+                    # id_list = search_combined_pinecone(
+                    #     df, index, user_query, top_n_final=100, return_json=True, user=self.request.user
+                    # )
+                    return Response({"error": "Pinecone is disabled. Please use Qdrant."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                else:
+                    # Sử dụng ChromaDB (đã comment - không dùng nữa)
+                    # collection = initialize_vector_db()
+                    # if collection is None:
+                    #     return Response({"error": "Vector DB unavailable."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+                    # id_list = search_combined_chroma(
+                    #     df, collection, user_query, top_n_final=100, return_json=True, user=self.request.user
+                    # )
+                    return Response({"error": "ChromaDB is disabled. Please use Qdrant."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
                 if not id_list:
                     return Response({"results": []})
 
-                # For each ID, build a detailed result dict
-                detailed_results = []
-                for idx in id_list:
-                    # idx may be string or int, ensure correct type for DataFrame lookup
-                    try:
-                        profile = df.loc[int(idx)] if int(idx) in df.index else df[df['id'] == int(idx)].iloc[0]
-                    except Exception:
-                        continue
+                # Kiểm tra xem id_list là list of dicts (từ return_json=True) hay list of IDs
+                if isinstance(id_list, list) and len(id_list) > 0 and isinstance(id_list[0], dict):
+                    # Đã là list of dicts từ search function (return_json=True)
+                    detailed_results = []
+                    for result_dict in id_list:
+                        # Lấy các field từ result_dict (đã có đầy đủ từ search function)
+                        detailed_results.append({
+                            "id": result_dict.get('id', ''),
+                            "title": result_dict.get('title', ''),
+                            "full_name": result_dict.get('full_name', ''),
+                            "losing_year": result_dict.get('losing_year', ''),
+                            "born_year": result_dict.get('born_year', ''),
+                            "name_of_father": result_dict.get('name_of_father', ''),
+                            "name_of_mother": result_dict.get('name_of_mother', ''),
+                            "siblings": result_dict.get('siblings', ''),
+                            "detail": result_dict.get('detail', ''),
+                        })
+                else:
+                    # Là list of IDs, cần build detailed_results từ DataFrame
+                    detailed_results = []
+                    for idx in id_list:
+                        # idx may be string or int, ensure correct type for DataFrame lookup
+                        try:
+                            profile = df.loc[int(idx)] if int(idx) in df.index else df[df['id'] == int(idx)].iloc[0]
+                        except Exception:
+                            continue
 
-                    detailed_results.append({
-                        "id": profile.get('id', ''),
-                        "title": profile.get('Tiêu đề', ''),
-                        "full_name": profile.get('Họ và tên', ''),
-                        "losing_year": profile.get('Năm thất lạc', ''),
-                        "born_year": profile.get('Năm sinh', ''),
-                        "name_of_father": profile.get('Tên cha', ''),
-                        "name_of_mother": profile.get('Tên mẹ', ''),
-                        "siblings": profile.get('Anh chị em', ''),
-                        "detail": str(profile.get('Chi tiet_merged', '')),
-                    })
+                        detailed_results.append({
+                            "id": profile.get('id', ''),
+                            "title": profile.get('Tiêu đề', ''),
+                            "full_name": profile.get('Họ và tên', ''),
+                            "losing_year": profile.get('Năm thất lạc', ''),
+                            "born_year": profile.get('Năm sinh', ''),
+                            "name_of_father": profile.get('Tên cha', ''),
+                            "name_of_mother": profile.get('Tên mẹ', ''),
+                            "siblings": profile.get('Anh chị em', ''),
+                            "detail": str(profile.get('Chi tiet_merged', '')),
+                        })
 
                 print("Tìm theo truy vấn detailed_results:", detailed_results)
 
